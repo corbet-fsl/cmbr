@@ -9,6 +9,7 @@ use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
 async fn complete_membership_round_trip() {
     let (_dir, db) = temporary().await;
     let facade = facade(&db, "a", Clock::new());
+    assert_eq!(facade.community(), "a");
     let (mut device, auth) = pending(&facade, "a").await;
     let proof = test_gate("a", SUBJECT);
     assert_eq!(
@@ -82,6 +83,21 @@ async fn unproven_pin_spends_cannot_change_state_even_after_restart() {
         .unwrap();
     assert_eq!(
         m.pin(&auth.authentication, "restricted", &original).await,
+        Err(Error::Pin)
+    );
+    let overflow = cmbr::Pin {
+        revision: u64::MAX,
+        ..pin
+    };
+    assert_eq!(
+        m.change_pin(
+            &auth.authentication,
+            "restricted",
+            overflow,
+            &replacement,
+            b"unspent"
+        )
+        .await,
         Err(Error::Pin)
     );
     for evidence in [b"unspent".as_slice(), b"signed-acceptance", b"replay"] {
@@ -410,6 +426,44 @@ async fn additional_device_preserves_membership_and_survives_original_removal() 
     assert_eq!(m.resume(&first.authentication).await.unwrap(), admitted);
     let survivor = login(&m, &mut second, USER).await;
     assert_eq!(survivor.enrolment, admitted);
+    let mut live_policy = verified_policy(&policy("a"), now()).await;
+    let snapshot = live_policy.verified_settings(now() as u64).await.unwrap();
+    let gates = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now()).await;
+    let lobby = m
+        .lobby(&survivor.authentication, &live_policy, &snapshot, &gates)
+        .await
+        .unwrap();
+    assert!(
+        !lobby
+            .warnings
+            .contains(&cmbr::Warning::AddSecondDeviceOrSyncedPasskey)
+    );
+    assert!(
+        !m.session_is_active(&first.authentication, added.credential_id())
+            .await
+            .unwrap()
+    );
+    let (challenge, pending) = m
+        .begin_additional_registration(&first.authentication)
+        .await
+        .unwrap();
+    let mut request = challenge.public_key;
+    request
+        .authenticator_selection
+        .as_mut()
+        .unwrap()
+        .require_resident_key = false;
+    let response = SoftToken::new(true)
+        .unwrap()
+        .0
+        .perform_register(ckyh::Url::parse(ORIGIN).unwrap(), request, 300_000)
+        .unwrap();
+    // Both sessions belong to the same member, but the ceremony authorizer is exact.
+    assert!(matches!(
+        m.finish_additional_registration(&survivor.authentication, pending, response.into())
+            .await,
+        Err(Error::Identity)
+    ));
     m.authorize_device_key(&survivor.authentication, key_two)
         .await
         .unwrap();

@@ -121,6 +121,11 @@ impl<S, L, C> Clone for Membership<S, L, C> {
 impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
     Membership<S, L, C>
 {
+    /// Immutable community of every composed membership store and passkey ceremony.
+    pub fn community(&self) -> &str {
+        self.storage.community()
+    }
+
     /// Durable revocation events for cmty to forward to cplc before issuance.
     pub async fn revocations(&self, limit: usize) -> Result<Vec<crate::Revocation>> {
         self.storage.revocations(limit).await
@@ -225,9 +230,8 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             let keys = self.passkeys.clone();
             let receipt =
                 blocking(move || keys.finish_registration(state.pending, &response, month)).await?;
-            if receipt.member() != state.user {
-                return Err(Error::Identity);
-            }
+            // Enrol checks both receipt community and member against this row
+            // before applying the transition.
             Ok(self
                 .enrol
                 .apply(&row, Event::PasskeyRegistered(&receipt), now)
@@ -403,7 +407,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         let m = self.clone();
         let auth = auth.clone();
-        tokio::spawn(async move {
+        completing(async move {
             let _guard = guard;
             let now = m.now()?;
             let row = m.authenticated(&auth, now).await?;
@@ -429,7 +433,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 .await?)
         })
         .await
-        .map_err(|_| Error::Unavailable)?
     }
 
     /// Pure lobby: current facts and cplc's decision, without lifecycle writes.
@@ -534,7 +537,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             .ok_or(Error::InvalidInput)?;
         let m = self.clone();
         let auth = auth.clone();
-        tokio::spawn(async move {
+        completing(async move {
             let _guard = guard;
             m.identity(&auth).await?;
             m.unrestricted(row.subject()).await?;
@@ -585,7 +588,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             Ok(row)
         })
         .await
-        .map_err(|_| Error::Unavailable)?
     }
 
     /// Explicit lapse; merely asking for the lobby never calls this transition.
@@ -1067,6 +1069,14 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(|_| Error::Unavailable)?
         .map_err(Into::into)
+}
+
+// Once submitted, a mutation finishes even when the awaiting request is dropped.
+// Both mutation entry points share the same real task-failure boundary.
+async fn completing<T: Send + 'static>(
+    work: impl std::future::Future<Output = Result<T>> + Send + 'static,
+) -> Result<T> {
+    tokio::spawn(work).await.map_err(|_| Error::Unavailable)?
 }
 
 #[cfg(test)]

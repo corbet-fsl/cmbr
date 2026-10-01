@@ -1,13 +1,74 @@
 #!/usr/bin/env python3
 """Require all emitted source lines and branches from the same LLVM execution."""
 import json
+import hashlib
+import tomllib
+import re
 from collections import Counter
 import sys
 from pathlib import Path
 
 
-def check(lcov, raw_json, root):
+def check(lcov, raw_json, root, annotated, target='native'):
     root = Path(root).resolve()
+
+    allowed = {}
+    allowed_branches = {}
+    manifest = root / '.github/coverage-exclusions.json'
+    for entry in json.loads(manifest.read_text()) if manifest.exists() else []:
+        if entry.get('target', 'native') != target:
+            continue
+        if not entry.get('reason') or not entry.get('evidence'):
+            raise ValueError('Exclusion requires reason and evidence')
+        path = (root / entry['file']).resolve()
+        relative = path.relative_to(root)
+        if relative.suffix != '.rs' or 'tests' in relative.parts or 'target' in relative.parts:
+            raise ValueError('Exclusion must identify production Rust source')
+        line = entry['line']
+        if not isinstance(line, int) or isinstance(line, bool) or line <= 0:
+            raise ValueError('Invalid excluded source line')
+        if path.read_text().splitlines()[line - 1].strip() != entry['source']:
+            raise ValueError('Excluded source moved or changed; review it')
+        evidence_sources = entry.get('evidence_sources', {})
+        if not isinstance(evidence_sources, dict):
+            raise ValueError('Invalid evidence source inventory')
+        for name, digest in evidence_sources.items():
+            dependency = (root / name).resolve()
+            dependency.relative_to(root)
+            if hashlib.sha256(dependency.read_bytes()).hexdigest() != digest:
+                raise ValueError('Exclusion evidence changed; review it')
+        packages = entry.get('evidence_packages', {})
+        if not isinstance(packages, dict):
+            raise ValueError('Invalid proof dependency inventory')
+        if packages:
+            locked = tomllib.loads((root / 'Cargo.lock').read_text())['package']
+            for name, identity in packages.items():
+                if (not isinstance(name, str) or not name
+                        or not isinstance(identity, dict)
+                        or set(identity) != {'version', 'source'}
+                        or any(not isinstance(value, str) or not value for value in identity.values())
+                        or not re.fullmatch(r'git\+.+#[0-9a-f]{40}', identity['source'])):
+                    raise ValueError('Proof dependency requires an exact locked Git identity')
+                matches = [package for package in locked if package['name'] == name]
+                if len(matches) != 1 or any(matches[0].get(key) != value for key, value in identity.items()):
+                    raise ValueError('Proof dependency changed or is not unique; review it')
+        key = (str(relative), line)
+        if 'branch' in entry:
+            branch = entry['branch']
+            if not isinstance(branch, dict) or set(branch) != {'block', 'id'}:
+                raise ValueError('Exclusion requires one exact branch arm')
+            if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in branch.values()):
+                raise ValueError('Invalid excluded branch coordinate')
+            if str(relative) not in evidence_sources:
+                raise ValueError('Branch exception requires complete source hash')
+            key += (branch['block'], branch['id'])
+            if key in allowed_branches:
+                raise ValueError('Duplicate branch exclusion')
+            allowed_branches[key] = entry
+        else:
+            if key in allowed:
+                raise ValueError('Duplicate line exclusion')
+            allowed[key] = entry
 
     def source_path(value):
         path = Path(value).resolve().relative_to(root)
@@ -17,10 +78,13 @@ def check(lcov, raw_json, root):
 
     if raw_json.get('type') != 'llvm.coverage.json.export' or not raw_json.get('data'):
         raise ValueError('Missing companion raw LLVM JSON')
-    expected = {
-        source_path(item['filename']): item
-        for unit in raw_json['data'] for item in unit['files']
-    }
+    expected = {}
+    for unit in raw_json['data']:
+        for item in unit['files']:
+            path = source_path(item['filename'])
+            if path in expected:
+                raise ValueError('Duplicate raw source')
+            expected[path] = item
     if not expected:
         raise ValueError('Empty production file inventory')
     files, lines, branches = set(), {}, {}
@@ -89,6 +153,53 @@ def check(lcov, raw_json, root):
             raise ValueError(f'Unexpected LCOV record: {record}')
     if current is not None or files != set(expected) or not lines:
         raise ValueError('Incomplete or empty source coverage inventory')
+    # Cross-check every emitted line location against the same execution's
+    # upstream annotated report. Summary counts alone can include generic copies
+    # and therefore cannot detect a deleted DA record reliably.
+    annotated_lines, annotated_files = {}, set()
+    current = None
+    # Upstream omits the filename heading for a single source file. Only that
+    # unambiguous inventory may bind a heading-free annotated report.
+    has_heading = any(row.endswith('.rs:') and row.startswith('/') for row in annotated.splitlines())
+    if len(files) == 1 and not has_heading:
+        current = next(iter(files))
+        annotated_files.add(current)
+    for record in annotated.splitlines():
+        if record.endswith('.rs:') and record.startswith('/'):
+            current = source_path(record[:-1])
+            if current in annotated_files:
+                raise ValueError('Duplicate annotated source')
+            annotated_files.add(current)
+        match = re.match(r'^\s*(\d+)\|\s*([0-9]+(?:\.[0-9]+)?[kMGT]?)\|', record)
+        if match:
+            key = (current, int(match[1]))
+            if current is None or key in annotated_lines:
+                raise ValueError('Invalid annotated line inventory')
+            annotated_lines[key] = float(match[2].rstrip('kMGT')) > 0
+    if annotated_files != files or set(annotated_lines) != set(lines):
+        raise ValueError('Incomplete emitted line inventory')
+    if any((lines[key] > 0) != hit for key, hit in annotated_lines.items()):
+        raise ValueError('Inconsistent emitted line coverage')
+    if not allowed.keys() <= lines.keys():
+        raise ValueError('Exclusion absent from actual LLVM evidence')
+    if any(lines[key] != 0 for key in allowed):
+        raise ValueError('Excluded line exercised; remove its exception')
+    # An unreachable callback can contain a condition, but a line exception
+    # must never erase that condition implicitly. Every emitted arm needs its
+    # own source-bound justification and must remain present in all reports.
+    for key in branches:
+        if key[:2] in allowed and key not in allowed_branches:
+            raise ValueError('Line exception requires every contained branch arm')
+    if not allowed_branches.keys() <= branches.keys():
+        raise ValueError('Branch exclusion absent from actual LLVM evidence')
+    if any(branches[key] != 0 for key in allowed_branches):
+        raise ValueError('Excluded branch exercised; remove its exception')
+    for key in allowed:
+        print('Excluded line:', key, allowed[key]['reason'])
+        del lines[key]
+    for key in allowed_branches:
+        print('Excluded branch:', key, allowed_branches[key]['reason'])
+        del branches[key]
     missing_lines = [key for key, count in lines.items() if count == 0]
     missing_branches = [key for key, count in branches.items() if count == 0]
     print(f'lines: {len(lines) - len(missing_lines)}/{len(lines)}')
@@ -99,6 +210,6 @@ def check(lcov, raw_json, root):
 
 if __name__ == '__main__':
     try:
-        check(Path(sys.argv[1]).read_text(), json.loads(Path(sys.argv[2]).read_text()), Path.cwd())
-    except (ValueError, KeyError, TypeError, OSError) as error:
+        check(Path(sys.argv[1]).read_text(), json.loads(Path(sys.argv[2]).read_text()), Path.cwd(), Path(sys.argv[3]).read_text(), sys.argv[4] if len(sys.argv) > 4 else 'native')
+    except (ValueError, KeyError, TypeError, OSError, IndexError) as error:
         sys.exit(f'Coverage gate: {error}')

@@ -83,6 +83,10 @@ async fn committed_passkey_receipt_survives_an_interrupted_registration() {
     })
     .await
     .unwrap();
+    assert!(matches!(
+        m.begin_registration(USER, SUBJECT).await,
+        Err(Error::Transition)
+    ));
     assert_eq!(
         m.enrolment_state(USER).await.unwrap().state(),
         State::PasskeyRegistered
@@ -91,6 +95,228 @@ async fn committed_passkey_receipt_survives_an_interrupted_registration() {
         login(&m, &mut token, USER).await.enrolment.state(),
         State::PasskeyRegistered
     );
+}
+
+fn registration_reply(
+    mut challenge: ckyh::CreationChallengeResponse,
+) -> ckyh::RegisterPublicKeyCredential {
+    use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+    challenge
+        .public_key
+        .authenticator_selection
+        .as_mut()
+        .unwrap()
+        .require_resident_key = false;
+    SoftToken::new(true)
+        .unwrap()
+        .0
+        .perform_register(
+            ckyh::Url::parse(ORIGIN).unwrap(),
+            challenge.public_key,
+            300_000,
+        )
+        .unwrap()
+        .into()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_registrations_cannot_finish_after_registration_or_release() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "registration-race", Clock::new());
+    let (first, first_state) = m.begin_registration(USER, SUBJECT).await.unwrap();
+    let (second, second_state) = m.begin_registration(USER, SUBJECT).await.unwrap();
+    m.finish_registration(first_state, registration_reply(first))
+        .await
+        .unwrap();
+    assert!(matches!(
+        m.finish_registration(second_state, registration_reply(second))
+            .await,
+        Err(Error::Transition)
+    ));
+
+    let m = facade(&db, "release-race", Clock::new());
+    let (challenge, state) = m.begin_registration(USER, SUBJECT).await.unwrap();
+    assert_eq!(m.release(USER).await.unwrap().state(), State::Released);
+    assert!(matches!(
+        m.finish_registration(state, registration_reply(challenge))
+            .await,
+        Err(Error::Transition)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoked_interrupted_first_registration_cannot_finish_another_ceremony() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "interrupted-loss", Clock::new());
+    let (first, first_state) = m.begin_registration(USER, SUBJECT).await.unwrap();
+    let (second, second_state) = m.begin_registration(USER, SUBJECT).await.unwrap();
+    let keys = m.passkeys.clone();
+    let response = registration_reply(first);
+    blocking(move || {
+        let receipt = keys.finish_registration(
+            first_state.pending,
+            &response,
+            ckyh::CreationMonth::new(2026, 9).unwrap(),
+        )?;
+        keys.revoke(USER, receipt.credential_id())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        m.enrol_store.load(USER).await.unwrap().unwrap().state(),
+        State::Started
+    );
+    assert!(matches!(
+        m.finish_registration(second_state, registration_reply(second))
+            .await,
+        Err(Error::Transition)
+    ));
+    assert_eq!(m.credentials(USER).await.unwrap().len(), 1);
+    assert!(m.credentials(USER).await.unwrap()[0].is_revoked());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn authenticated_policy_cannot_admit_with_invalid_membership_durations() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "policy-durations", Clock::new());
+    let (_, login) = pending(&m, "policy-durations").await;
+    let mut raw = policy("policy-durations");
+    raw.content.insert(crbk::PROBATION_DAYS.into(), 0.into());
+    let mut policy = verified_policy(&raw, now()).await;
+    let snapshot = policy.verified_settings(now() as u64).await.unwrap();
+    let gates = checked(
+        &snapshot,
+        SUBJECT,
+        &[test_gate("policy-durations", SUBJECT)],
+        now(),
+    )
+    .await;
+    assert_eq!(
+        m.admit(&login.authentication, &policy, &snapshot, &gates, lease())
+            .await,
+        Err(Error::Policy)
+    );
+    assert!(
+        m.register
+            .member(&login.enrolment.member_id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(m.storage.probation(SUBJECT).await.unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn imported_enrolment_without_register_row_cannot_issue_membership() {
+    use cplc::MembershipSource;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "missing-register", Clock::new());
+    let (_, login) = pending(&m, "missing-register").await;
+    let admitted = m
+        .admit_test(
+            &login.authentication,
+            &policy("missing-register"),
+            &[test_gate("missing-register", SUBJECT)],
+            lease(),
+        )
+        .await
+        .unwrap();
+    db.community("missing-register")
+        .unwrap()
+        .execute(
+            "DELETE FROM crgs_members WHERE member_id = ?1",
+            crlt::params![SUBJECT.as_bytes().to_vec()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.enrolment_state(USER).await.unwrap(), admitted);
+    assert_eq!(m.resume(&login.authentication).await.unwrap(), admitted);
+    assert!(m.member(&login.authentication).await.unwrap().is_none());
+    assert!(m.membership(SUBJECT, now() as u64).await.is_err());
+    assert!(m.revocations(10).await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lost_revocation_completion_is_reconciled_from_actual_keyhole_state() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "revocation-reconcile", Clock::new());
+    let (_, login) = pending(&m, "revocation-reconcile").await;
+    let keys = m.passkeys.clone();
+    let id = login.authentication.credential_id().clone();
+    blocking(move || keys.revoke(USER, &id)).await.unwrap();
+    assert_eq!(
+        m.enrolment_state(USER).await.unwrap().state(),
+        State::Released
+    );
+    assert_eq!(m.revocations(10).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn current_membership_requires_publication_before_outbox_acknowledgement() {
+    use cplc::MembershipSource;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "publication", Clock::new());
+    let (_, login) = pending(&m, "publication").await;
+    let raw = policy("publication");
+    let gate = test_gate("publication", SUBJECT);
+    assert_eq!(
+        m.admit_test(
+            &login.authentication,
+            &raw,
+            std::slice::from_ref(&gate),
+            crgs::YearMonth::new(2025, 1).unwrap()
+        )
+        .await,
+        Err(Error::InvalidInput)
+    );
+    assert_eq!(
+        m.admit_test(&login.authentication, &policy("foreign"), &[], lease())
+            .await,
+        Err(Error::Identity)
+    );
+    m.admit_test(
+        &login.authentication,
+        &raw,
+        std::slice::from_ref(&gate),
+        lease(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        m.member(&login.authentication)
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+            .as_bytes(),
+        SUBJECT.as_bytes()
+    );
+    assert_eq!(
+        m.reserve_handle(&login.authentication, HANDLE, &[]).await,
+        Err(Error::Transition)
+    );
+    assert_eq!(
+        m.lapse_test(&login.authentication, &raw, std::slice::from_ref(&gate))
+            .await,
+        Err(Error::Policy)
+    );
+    m.storage.signal_revocation(SUBJECT).await.unwrap();
+    assert!(m.membership(SUBJECT, now() as u64).await.is_err());
+    let mut authority = verified_policy(&raw, now()).await;
+    authority.bump_epoch().await.unwrap();
+    authority
+        .publish(cplc::SnapshotKind::Settings, now() as u64)
+        .await
+        .unwrap();
+    authority
+        .publish(cplc::SnapshotKind::RevocationList, now() as u64)
+        .await
+        .unwrap();
+    for event in m.revocations(10).await.unwrap() {
+        m.acknowledge_revocation(&event).await.unwrap();
+    }
+    assert!(!m.storage.revocation_pending(SUBJECT).await.unwrap());
+    assert!(m.membership(SUBJECT, now() as u64).await.is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -359,6 +585,10 @@ async fn stale_verified_inputs_and_unbounded_leases_cannot_admit() {
         .publish(cplc::SnapshotKind::Settings, now() as u64)
         .await
         .unwrap();
+    assert!(matches!(
+        m.lobby(&login.authentication, &policy, &old, &gates).await,
+        Err(Error::Policy)
+    ));
     assert_eq!(
         m.admit(&login.authentication, &policy, &old, &gates, lease())
             .await,
@@ -567,4 +797,236 @@ async fn issuance_source_holds_live_authority_until_its_lease_is_released() {
             .is_err()
     );
     assert_eq!(m.revocations(10).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_configuration_registration_and_worker_failure_are_refused() {
+    let (_dir, db) = temporary().await;
+    for months in [0, 25] {
+        let mut value = config();
+        value.lease_months = months;
+        assert!(matches!(
+            super::Membership::new(
+                &db,
+                crate::MemoryStorage::new("bounds").unwrap(),
+                value,
+                Verify,
+                Clock::new()
+            ),
+            Err(Error::InvalidInput)
+        ));
+    }
+    let mut mismatched = config();
+    mismatched.rp_id = "foreign.example.org".into();
+    assert!(
+        super::Membership::new(
+            &db,
+            crate::MemoryStorage::new("bounds").unwrap(),
+            mismatched,
+            Verify,
+            Clock::new()
+        )
+        .is_err()
+    );
+    let m = facade(&db, "bounds", Clock::new());
+    assert!(matches!(
+        m.begin_registration(Uuid::nil(), SUBJECT).await,
+        Err(Error::InvalidInput)
+    ));
+    assert!(matches!(
+        m.begin_registration(USER, "private\nsubject").await,
+        Err(Error::InvalidInput)
+    ));
+    assert_eq!(
+        blocking::<()>(|| panic!("synthetic worker failure")).await,
+        Err(Error::Unavailable)
+    );
+    assert_eq!(
+        super::completing::<()>(async { panic!("task unwind") }).await,
+        Err(Error::Unavailable)
+    );
+    assert_eq!(
+        blocking::<()>(|| Err(ckyh::Error::Storage)).await,
+        Err(Error::Unavailable)
+    );
+    for time in [-1, i64::MAX, 253402300800] {
+        assert_eq!(date(time), Err(Error::InvalidInput));
+    }
+    let pin = crate::PinV2::seal(
+        &cpns::FingerprintContext {
+            community: "bounds",
+            member: "private-member",
+            field: "private-field",
+        },
+        b"private-value",
+        &cpns::Salt::from_bytes(vec![42; 32]).unwrap(),
+    );
+    assert_eq!(format!("{pin:?}"), "PinV2([redacted])");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_owner_receipts_refuse_foreign_scopes_and_stale_register_rows() {
+    use cplc::MembershipSource;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "owner-boundaries", Clock::new());
+    let (_, login) = pending(&m, "owner-boundaries").await;
+    let foreign = facade(&db, "foreign", Clock::new());
+    let foreign_row = foreign.enrol.start(USER, SUBJECT, now()).await.unwrap();
+    assert_eq!(m.check_record(&foreign_row), Err(Error::Identity));
+    for mut order in [ban("foreign"), ban("owner-boundaries")] {
+        if order.order.community == "owner-boundaries" {
+            order.order.subject = "another-subject".into();
+        }
+        assert_eq!(
+            m.self_ban(&login.authentication, &order).await,
+            Err(Error::Identity)
+        );
+    }
+    assert!(m.revocations(10).await.unwrap().is_empty());
+    let raw = policy("owner-boundaries");
+    m.admit_test(
+        &login.authentication,
+        &raw,
+        &[test_gate("owner-boundaries", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let first_key = ed25519_dalek::SigningKey::from_bytes(&[61; 32])
+        .verifying_key()
+        .to_bytes();
+    let second_key = ed25519_dalek::SigningKey::from_bytes(&[62; 32])
+        .verifying_key()
+        .to_bytes();
+    // Import a genuine historical multi-key binding through the actual owner store.
+    m.storage
+        .set_device_keys(
+            SUBJECT,
+            login.authentication.credential_id().as_ref(),
+            &[first_key, second_key],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.authorize_device_key(&login.authentication, first_key)
+            .await,
+        Err(Error::Identity)
+    );
+    // The register has actually released the handle, while Enrol still reflects admission.
+    let late = "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    m.register.release_expired(late, 10).await.unwrap();
+    assert!(m.membership(SUBJECT, now() as u64).await.is_err());
+    assert_eq!(
+        m.admit_test(
+            &login.authentication,
+            &raw,
+            &[test_gate("owner-boundaries", SUBJECT)],
+            lease()
+        )
+        .await,
+        Err(Error::Register)
+    );
+    assert!(m.revocations(10).await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn temporary_legal_restriction_lapses_without_terminating_the_member() {
+    use ed25519_dalek::Signer;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "temporary-order", Clock::new());
+    let (_, login) = pending(&m, "temporary-order").await;
+    m.admit_test(
+        &login.authentication,
+        &policy("temporary-order"),
+        &[test_gate("temporary-order", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let mut signed = ban("temporary-order");
+    signed.order.kind = clbs::OrderKind::Legal {
+        authority: "fixture-authority".into(),
+    };
+    signed.order.period.ends_at = Some(now() + 3600);
+    signed.proof = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .sign(&signed.order.signing_payload().unwrap())
+        .to_bytes()
+        .to_vec();
+    m.legal.record_legal(&signed).await.unwrap();
+    assert_eq!(
+        m.enrolment_state(USER).await.unwrap().state(),
+        State::Lapsed
+    );
+    assert!(m.resume(&login.authentication).await.is_err());
+    assert_eq!(m.revocations(10).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn raw_key_removal_cannot_leave_membership_issuance_authority() {
+    use cplc::MembershipSource;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "issuance-reconcile", Clock::new());
+    let (_, login) = pending(&m, "issuance-reconcile").await;
+    m.admit_test(
+        &login.authentication,
+        &policy("issuance-reconcile"),
+        &[test_gate("issuance-reconcile", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let keys = m.passkeys.clone();
+    let id = login.authentication.credential_id().clone();
+    blocking(move || keys.revoke(USER, &id)).await.unwrap();
+    assert!(m.membership(SUBJECT, now() as u64).await.is_err());
+    let released = m.enrolment_state(USER).await.unwrap();
+    assert_eq!(released.state(), State::Released);
+    assert_eq!(
+        m.release_if_lost(released.clone(), now()).await.unwrap(),
+        released
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fresh_policy_cannot_renew_a_lazily_released_handle() {
+    use cplc::MembershipSource;
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "lazy-release", clock.clone());
+    let (_, login) = pending(&m, "lazy-release").await;
+    let raw = policy("lazy-release");
+    m.admit_test(
+        &login.authentication,
+        &raw,
+        &[test_gate("lazy-release", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let later = "2030-01-01T12:00:00Z"
+        .parse::<DateTime<Utc>>()
+        .unwrap()
+        .timestamp();
+    clock.set(later);
+    let mut policy = verified_policy(&raw, later).await;
+    let snapshot = policy.verified_settings(later as u64).await.unwrap();
+    let mut gate = test_gate("lazy-release", SUBJECT);
+    gate.valid_until = later + 3600;
+    let gates = checked(&snapshot, SUBJECT, &[gate], later).await;
+    assert_eq!(
+        m.admit(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &gates,
+            crgs::YearMonth::new(2031, 1).unwrap()
+        )
+        .await,
+        Err(Error::Transition)
+    );
+    assert!(m.membership(SUBJECT, later as u64).await.is_err());
+    assert_eq!(
+        m.enrolment_state(USER).await.unwrap().state(),
+        State::Released
+    );
 }

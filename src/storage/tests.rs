@@ -1,6 +1,13 @@
 use super::*;
 
 async fn contract(store: impl Storage) {
+    store
+        .acknowledge(&Revocation {
+            member: "never-recorded".into(),
+            generation: 1,
+        })
+        .await
+        .unwrap();
     let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32])
         .verifying_key()
         .to_bytes();
@@ -96,4 +103,340 @@ async fn cancellation_and_errors_drop_only_the_affected_member_guard() {
     let _again = tokio::time::timeout(std::time::Duration::from_secs(1), member_lock("locks", a))
         .await
         .unwrap();
+}
+
+async fn boundary_contract(store: impl Storage) {
+    let keys: Vec<_> = (0u8..65)
+        .map(|seed| {
+            ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+                .verifying_key()
+                .to_bytes()
+        })
+        .collect();
+    for subject in ["".to_owned(), "\n".into(), "x".repeat(1025)] {
+        assert!(
+            store
+                .set_device_keys(&subject, b"one", &keys[..1])
+                .await
+                .is_err()
+        );
+        assert!(store.device_keys(&subject).await.is_err());
+        assert!(store.probation(&subject).await.is_err());
+        assert!(store.initialize_probation(&subject, 86400).await.is_err());
+        assert!(store.clear_passed_probation(&subject, 86400).await.is_err());
+        assert!(store.signal_revocation(&subject).await.is_err());
+        assert!(store.revocation_pending(&subject).await.is_err());
+        assert!(
+            store
+                .acknowledge(&Revocation {
+                    member: subject,
+                    generation: 1
+                })
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        store
+            .set_device_keys("bounded", &[1; 1025], &keys[..1])
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .set_device_keys("bounded", b"one", &keys)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .initialize_probation("bounded", u64::MAX)
+            .await
+            .is_err()
+    );
+    for count in [0, 1001] {
+        assert!(store.revocations(count).await.is_err());
+        assert!(store.prune_probation(86400, count).await.is_err());
+    }
+    assert!(
+        store
+            .clear_passed_probation("bounded", u64::MAX)
+            .await
+            .is_err()
+    );
+    assert!(store.prune_probation(u64::MAX, 1).await.is_err());
+    assert!(
+        store
+            .acknowledge(&Revocation {
+                member: "bounded".into(),
+                generation: u64::MAX
+            })
+            .await
+            .is_err()
+    );
+    assert!(!store.revocation_pending("absent").await.unwrap());
+    store.clear_passed_probation("absent", 86400).await.unwrap();
+    store.initialize_probation("bounded", 86400).await.unwrap();
+    store
+        .clear_passed_probation("bounded", 86400)
+        .await
+        .unwrap();
+    store
+        .clear_passed_probation("bounded", 86401)
+        .await
+        .unwrap();
+    assert_eq!(store.probation("bounded").await.unwrap(), Some(None));
+    store.signal_revocation("bounded").await.unwrap();
+    assert!(store.revocation_pending("bounded").await.unwrap());
+    let event = store
+        .revocations(1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.member == "bounded")
+        .unwrap();
+    store.acknowledge(&event).await.unwrap();
+    assert!(!store.revocation_pending("bounded").await.unwrap());
+    // The store's contract cap is 1024 bindings, independently of facade policy.
+    // Both actual adapters reject a corrupt/oversized retained set instead of truncating it.
+    for credential in 0u8..17 {
+        store
+            .set_device_keys("bounded", &[credential], &keys[..64])
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        store.device_keys("bounded").await,
+        Err(Error::Unavailable)
+    ));
+    store.set_device_keys("bounded", &[16], &[]).await.unwrap();
+    assert_eq!(store.device_keys("bounded").await.unwrap().len(), 1024);
+}
+
+#[tokio::test]
+async fn memory_boundaries_and_generation_overflow_preserve_outbox() {
+    assert!(MemoryStorage::new("").is_err());
+    let store = MemoryStorage::new("memory-boundaries").unwrap();
+    boundary_contract(store.clone()).await;
+    store
+        .state
+        .lock()
+        .await
+        .revocations
+        .insert("overflow".into(), (i64::MAX as u64, false));
+    assert_eq!(
+        store.signal_revocation("overflow").await,
+        Err(Error::Unavailable)
+    );
+    assert!(!store.revocation_pending("overflow").await.unwrap());
+    assert_eq!(
+        format!(
+            "{:?}",
+            Revocation {
+                member: "private-subject".into(),
+                generation: 7
+            }
+        ),
+        "Revocation { .. }"
+    );
+}
+
+#[tokio::test]
+async fn libsql_rejects_real_dynamic_type_corruption_and_keeps_atomic_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", dir.path().join("boundaries.db").display());
+    let db = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    db.migrate(&[
+        crlt::Migration::new(1, "cmbr", SCHEMA),
+        crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+    ])
+    .await
+    .unwrap();
+    assert!(LibsqlStorage::new(&db, "").is_err());
+    let store = LibsqlStorage::new(&db, "sql-boundaries").unwrap();
+    boundary_contract(store.clone()).await;
+    assert!(
+        store
+            .clear_passed_probation("bounded", u64::MAX)
+            .await
+            .is_err()
+    );
+    assert!(store.prune_probation(u64::MAX, 1).await.is_err());
+    assert!(
+        store
+            .acknowledge(&Revocation {
+                member: "bounded".into(),
+                generation: u64::MAX
+            })
+            .await
+            .is_err()
+    );
+    let key = ed25519_dalek::SigningKey::from_bytes(&[99; 32])
+        .verifying_key()
+        .to_bytes();
+    store
+        .set_device_keys("corrupt", b"one", &[key])
+        .await
+        .unwrap();
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_device_keys SET credential = ?1 WHERE subject = ?2",
+            params!["text", "corrupt"],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.device_keys("corrupt").await,
+        Err(Error::Unavailable)
+    ));
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_device_keys SET credential = ?1, signing_key = ?2 WHERE subject = ?3",
+            params![b"one".as_slice(), "x".repeat(32), "corrupt"],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.device_keys("corrupt").await,
+        Err(Error::Unavailable)
+    ));
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_device_keys SET signing_key = ?1 WHERE subject = ?2",
+            params![[0u8; 32].as_slice(), "corrupt"],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.device_keys("corrupt").await,
+        Err(Error::Unavailable)
+    ));
+    store.signal_revocation("overflow").await.unwrap();
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_revocations SET generation = ?1, pending = 0 WHERE subject = ?2",
+            params![i64::MAX, "overflow"],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.signal_revocation("overflow").await,
+        Err(Error::Unavailable)
+    );
+    assert!(!store.revocation_pending("overflow").await.unwrap());
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_revocations SET generation = ?1, pending = 1 WHERE subject = ?2",
+            params!["corrupt", "overflow"],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.revocations(1000).await,
+        Err(Error::Unavailable)
+    ));
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_probation SET probation_until = ?1 WHERE subject = ?2",
+            params!["corrupt", "bounded"],
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.probation("bounded").await, Err(Error::Unavailable));
+}
+
+#[tokio::test]
+async fn malformed_imported_integer_columns_never_create_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = crlt::Db::open(crlt::Config::new(
+        format!("file://{}", dir.path().join("imported.db").display()),
+        "",
+    ))
+    .await
+    .unwrap();
+    // Reproduce an imported database missing the newer numeric constraints.
+    // Queries still use real scoped SQL, the actual indexes and libSQL values.
+    let imported = SCHEMA
+        .replace(
+            " CHECK (probation_until >= 0 AND probation_until % 86400 = 0)",
+            "",
+        )
+        .replace(" CHECK (generation > 0)", "")
+        .replace(" CHECK (pending IN (0,1))", "");
+    db.migrate(&[crlt::Migration::new(1, "imported-membership", &imported)])
+        .await
+        .unwrap();
+    let store = LibsqlStorage::new(&db, "imported").unwrap();
+    store.initialize_probation("subject", 86400).await.unwrap();
+    for value in [-1, 86401] {
+        store
+            .scope
+            .execute(
+                "UPDATE cmbr_probation SET probation_until = ?1 WHERE subject = ?2",
+                params![value, "subject"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.probation("subject").await, Err(Error::Unavailable));
+    }
+    store.signal_revocation("subject").await.unwrap();
+    for value in [-1, 0] {
+        store
+            .scope
+            .execute(
+                "UPDATE cmbr_revocations SET generation = ?1 WHERE subject = ?2",
+                params![value, "subject"],
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.revocations(10).await,
+            Err(Error::Unavailable)
+        ));
+    }
+    store
+        .scope
+        .execute(
+            "UPDATE cmbr_revocations SET pending = ?1 WHERE subject = ?2",
+            params!["corrupt", "subject"],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.revocation_pending("subject").await,
+        Err(Error::Unavailable)
+    );
+}
+
+#[tokio::test]
+async fn poisoned_member_registry_preserves_the_actual_existing_queue() {
+    let user = ckyh::Uuid::from_u128(89);
+    let held = member_lock("registry-poison", user).await;
+    let registry = LOCKS.get().unwrap();
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = registry.lock().unwrap_or_else(|error| error.into_inner());
+            panic!("interrupted registry access");
+        })
+        .join()
+        .is_err()
+    );
+    let mut waiting = Box::pin(member_lock("registry-poison", user));
+    std::future::poll_fn(|context| {
+        assert!(std::future::Future::poll(waiting.as_mut(), context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(held);
+    let resumed = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+        .await
+        .unwrap();
+    drop(resumed);
+    registry.clear_poison();
 }
