@@ -61,7 +61,15 @@ async fn committed_passkey_receipt_survives_an_interrupted_registration() {
     let response = token
         .perform_register(
             cpky::Url::parse(ORIGIN).unwrap(),
-            challenge.public_key,
+            {
+                let mut request = challenge.public_key;
+                request
+                    .authenticator_selection
+                    .as_mut()
+                    .unwrap()
+                    .require_resident_key = false;
+                request
+            },
             300_000,
         )
         .unwrap();
@@ -69,7 +77,7 @@ async fn committed_passkey_receipt_survives_an_interrupted_registration() {
     blocking(move || {
         keys.finish_registration(
             pending.pending,
-            &response,
+            &response.into(),
             cpky::CreationMonth::new(2026, 9).unwrap(),
         )
     })
@@ -149,7 +157,8 @@ async fn different_members_log_in_and_read_lobbies_concurrently_without_writes()
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelled_reservation_finishes_and_never_blocks_other_members() {
     let (_dir, db) = temporary().await;
-    let m = facade(&db, "a", Clock::new());
+    let community = "cancelled-reservation";
+    let m = facade(&db, community, Clock::new());
     let mut first = register(&m, USER, SUBJECT).await;
     let auth = login(&m, &mut first, USER).await.authentication;
     let other = Uuid::from_u128(2);
@@ -157,12 +166,16 @@ async fn cancelled_reservation_finishes_and_never_blocks_other_members() {
     let second_auth = login(&m, &mut second, other).await.authentication;
     // The actual register transaction waits for this writer. Read operations use
     // other leases from the same pool and must not acquire the writer lock.
-    let writer = db.community("a").unwrap().tx().await.unwrap();
-    let copy = m.clone();
-    let task = tokio::spawn(async move { copy.reserve_handle(&auth, HANDLE, &[]).await });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    task.abort();
-    let _ = task.await;
+    let writer = db.community(community).unwrap().tx().await.unwrap();
+    // This fixture has its own member lock. Poll through its uncontended
+    // acquisition and task spawn before cancelling the caller's future.
+    let mut reservation = Box::pin(m.reserve_handle(&auth, HANDLE, &[]));
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(reservation.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(reservation);
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(1), m.resume(&second_auth))
             .await
@@ -173,7 +186,7 @@ async fn cancelled_reservation_finishes_and_never_blocks_other_members() {
     // Queueing behind this member waits for the owned cross-leaf task to finish.
     let _guard = tokio::time::timeout(
         std::time::Duration::from_secs(3),
-        crate::storage::member_lock("a", USER),
+        crate::storage::member_lock(community, USER),
     )
     .await
     .unwrap();
@@ -199,7 +212,15 @@ async fn revoked_authentication_cannot_change_pins_or_revoke_the_remaining_key()
     let response = token
         .perform_register(
             cpky::Url::parse(ORIGIN).unwrap(),
-            challenge.public_key,
+            {
+                let mut request = challenge.public_key;
+                request
+                    .authenticator_selection
+                    .as_mut()
+                    .unwrap()
+                    .require_resident_key = false;
+                request
+            },
             300000,
         )
         .unwrap();
@@ -207,7 +228,7 @@ async fn revoked_authentication_cannot_change_pins_or_revoke_the_remaining_key()
     let second = blocking(move || {
         keys.finish_registration(
             pending,
-            &response,
+            &response.into(),
             cpky::CreationMonth::new(2026, 9).unwrap(),
         )
     })
