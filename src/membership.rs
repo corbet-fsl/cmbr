@@ -708,6 +708,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     pub async fn authorize_device_key(&self, auth: &Authentication, key: [u8; 32]) -> Result<()> {
         let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         let row = self.authenticated(auth, self.now()?).await?;
+        crate::storage::device_input(row.subject(), auth.credential_id().as_ref(), &[key])?;
         let current = self.storage.device_keys(row.subject()).await?;
         let current: Vec<_> = current
             .iter()
@@ -720,7 +721,9 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 Err(Error::Identity)
             };
         }
-        self.storage.signal_revocation(row.subject()).await?;
+        // Adding authority under the held issuance lease leaves every previous
+        // credential valid. Only removal needs a public revocation; publishing
+        // an epoch here would reveal ordinary registration and device additions.
         self.storage
             .set_device_keys(row.subject(), auth.credential_id().as_ref(), &[key])
             .await
