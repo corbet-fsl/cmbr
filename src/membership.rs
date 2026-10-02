@@ -59,12 +59,43 @@ pub struct Login {
 /// Keep this value alive until the authorized garden operation completes.
 /// It is server authority, never a frontend DTO or a profile credential.
 pub struct RoleLease {
+    community: String,
+    member: String,
     role: crgs::Role,
+    checked_at: u64,
+    valid_until: u64,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// Original member-bound issuance lease. Only this Membership instance (or its
+/// clones) can create it; another member's queue guard cannot authorize a read.
+pub struct MembershipLease {
+    instance: Arc<()>,
+    member: String,
+    user: Uuid,
+    observed_at: u64,
     valid_until: u64,
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl RoleLease {
+    /// Exact source community whose original register authorized this lease.
+    pub fn community(&self) -> &str {
+        &self.community
+    }
+
+    /// Original passport-derived source-community pseudonym. A blind root-board
+    /// issuance proof must match this source member, never a root pseudonym.
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// Authoritative clock at the role check. Consumers reject a regressed clock
+    /// and recheck the exclusive deadline before releasing an authorized result.
+    pub fn checked_at(&self) -> u64 {
+        self.checked_at
+    }
+
     /// The one current role in the original community register.
     pub fn role(&self) -> crgs::Role {
         self.role
@@ -109,6 +140,7 @@ impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
 pub struct Membership<S, L, C = clbs::SystemClock> {
+    instance: Arc<()>,
     storage: Arc<S>,
     passkeys: Arc<ckyh::Passkeys<ckyh::LibsqlStore>>,
     enrol: Arc<cnrl::Enrol<cnrl::LibsqlStorage>>,
@@ -125,6 +157,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
 impl<S, L, C> Clone for Membership<S, L, C> {
     fn clone(&self) -> Self {
         Self {
+            instance: self.instance.clone(),
             storage: self.storage.clone(),
             passkeys: self.passkeys.clone(),
             enrol: self.enrol.clone(),
@@ -193,6 +226,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             SharedClock(clock.clone()),
         );
         Ok(Self {
+            instance: Arc::new(()),
             storage: Arc::new(storage),
             passkeys: Arc::new(passkeys),
             enrol: Arc::new(enrol),
@@ -726,7 +760,10 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let row = self.authenticated(auth, now).await?;
         let member = self.active_register_member(&row, now).await?;
         Ok(RoleLease {
+            community: self.community().into(),
+            member: row.subject().into(),
             role: member.role,
+            checked_at: now as u64,
             valid_until: lease_deadline(member.lease_end)?,
             _guard: guard,
         })
@@ -1075,7 +1112,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
 impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
     cplc::MembershipSource for Membership<S, L, C>
 {
-    type Lease = tokio::sync::OwnedMutexGuard<()>;
+    type Lease = MembershipLease;
     async fn membership(
         &self,
         member: &str,
@@ -1143,11 +1180,61 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                     lease_end: lease_end as u64,
                     authorized_devices: self.live_device_keys(&row).await?,
                 },
-                guard,
+                MembershipLease {
+                    instance: self.instance.clone(),
+                    member: member.into(),
+                    user: row.user(),
+                    observed_at: now,
+                    valid_until: lease_end as u64,
+                    _guard: guard,
+                },
             ))
         }
         .await;
         read.map_err(|_| cplc::Error::Invalid("membership source unavailable"))
+    }
+}
+
+impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
+    cplc::PasskeySource for Membership<S, L, C>
+{
+    async fn passkey(
+        &self,
+        member: &str,
+        credential_id: &[u8],
+        lease: &Self::Lease,
+        at: u64,
+    ) -> cplc::Result<ckyh::lineage::PublicCredential> {
+        let read: Result<_> = async {
+            let now = u64::try_from(self.now()?).map_err(|_| Error::InvalidInput)?;
+            if now != at
+                || !Arc::ptr_eq(&self.instance, &lease.instance)
+                || lease.member != member
+                || now < lease.observed_at
+                || now >= lease.valid_until
+                || credential_id.is_empty()
+                || credential_id.len() > 1024
+            {
+                return Err(Error::Identity);
+            }
+            // The retained original queue lease serializes registration/removal;
+            // check current lifecycle, legal restrictions and pending revocation
+            // again after Policy's awaits and before exporting the exact live key.
+            let row = self.enrol.view(lease.user, now as i64).await?;
+            if row.subject() != member
+                || row.state() != State::Admitted
+                || self.storage.revocation_pending(member).await?
+            {
+                return Err(Error::Restricted);
+            }
+            self.unrestricted(member).await?;
+            let keys = self.passkeys.clone();
+            let user = lease.user;
+            let id = ckyh::CredentialID::from(credential_id.to_vec());
+            blocking(move || keys.registered_public_credential(user, &id)).await
+        }
+        .await;
+        read.map_err(|_| cplc::Error::Invalid("passkey source unavailable"))
     }
 }
 

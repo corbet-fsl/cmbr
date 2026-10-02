@@ -10,7 +10,7 @@ pub use pins::PinV2;
 mod storage;
 
 pub use membership::{
-    Config, Lobby, Login, Membership, PendingAdditionalRegistration, PendingLogin,
+    Config, Lobby, Login, Membership, MembershipLease, PendingAdditionalRegistration, PendingLogin,
     PendingRegistration, RoleLease, Warning,
 };
 pub use storage::{

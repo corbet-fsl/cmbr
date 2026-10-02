@@ -9,6 +9,7 @@ date -u +%FT%TZ
 cargo update
 python3 .github/check-first-party.py --archive
 sha256sum Cargo.lock
-printf '%s\n' 'BEGIN_RESOLVED_LOCK_BASE64'
-base64 -w 0 Cargo.lock
-printf '\n%s\n' 'END_RESOLVED_LOCK_BASE64'
+receipt="${CARGO_TARGET_DIR:?}/ci-receipts/${CI_COMMIT_SHA:?}"
+mkdir -p "$receipt"
+cp Cargo.lock "$receipt/Cargo.lock"
+sha256sum "$receipt/Cargo.lock"

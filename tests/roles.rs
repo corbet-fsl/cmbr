@@ -103,6 +103,9 @@ async fn a_garden_operation_holds_demotion_and_revocation_until_it_completes() {
         .await
         .unwrap();
     let lease = m.role(&admin).await.unwrap();
+    assert_eq!(lease.community(), "roles");
+    assert_eq!(lease.member(), format!("{:096x}", 2));
+    assert_eq!(lease.checked_at(), now() as u64);
     assert_eq!(
         lease.valid_until(),
         "2027-10-01T00:00:00Z"

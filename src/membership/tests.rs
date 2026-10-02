@@ -800,6 +800,129 @@ async fn issuance_source_holds_live_authority_until_its_lease_is_released() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn passkey_source_requires_its_exact_member_lease_and_live_original_keyhole_row() {
+    use cplc::{MembershipSource, PasskeySource};
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "passkey-binding", clock.clone());
+    let (_, login) = pending(&m, "passkey-binding").await;
+    m.admit_test(
+        &login.authentication,
+        &policy("passkey-binding"),
+        &[test_gate("passkey-binding", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let (_, held) = m.membership(SUBJECT, now() as u64).await.unwrap();
+    let id = login.authentication.credential_id().as_ref();
+    let descriptor = m
+        .passkey(
+            SUBJECT,
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64,
+        )
+        .await
+        .unwrap();
+    assert_eq!(descriptor.community(), "passkey-binding");
+    assert_eq!(
+        descriptor.member(),
+        login.authentication.member().as_bytes()
+    );
+    assert_eq!(descriptor.credential_id(), id);
+    assert!(!descriptor.spki().is_empty());
+    m.clone()
+        .passkey(
+            SUBJECT,
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64,
+        )
+        .await
+        .unwrap();
+    assert!(
+        m.passkey(
+            "foreign-member",
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+        )
+        .await
+        .is_err()
+    );
+    for invalid in [Vec::new(), vec![0; 1025], vec![255; 64]] {
+        assert!(
+            m.passkey(
+                SUBJECT,
+                &invalid,
+                &held,
+                clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+            )
+            .await
+            .is_err()
+        );
+    }
+    let foreign = facade(&db, "foreign-passkey-binding", Clock::new());
+    assert!(
+        foreign
+            .passkey(
+                SUBJECT,
+                id,
+                &held,
+                clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+            )
+            .await
+            .is_err()
+    );
+    let mut removal = Box::pin(m.revoke_passkey(
+        &login.authentication,
+        login.authentication.credential_id().clone(),
+    ));
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(removal.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(
+        m.passkey(
+            SUBJECT,
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+        )
+        .await
+        .is_ok()
+    );
+    clock.set(held.valid_until as i64);
+    assert!(
+        m.passkey(
+            SUBJECT,
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+        )
+        .await
+        .is_err()
+    );
+    clock.set(now() - 1);
+    assert!(
+        m.passkey(
+            SUBJECT,
+            id,
+            &held,
+            clock.0.load(std::sync::atomic::Ordering::SeqCst) as u64
+        )
+        .await
+        .is_err()
+    );
+    clock.set(now());
+    drop(held);
+    removal.await.unwrap();
+    assert!(m.membership(SUBJECT, now() as u64).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_configuration_registration_and_worker_failure_are_refused() {
     let (_dir, db) = temporary().await;
     for months in [0, 25] {
