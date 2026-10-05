@@ -779,6 +779,45 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         target: Uuid,
         role: crgs::Role,
     ) -> Result<()> {
+        self.set_role_until(auth, target, role, None).await
+    }
+
+    /// Change a role using the community pseudonym exposed by the lobby.
+    /// The service supplies its authentication check time and current session's
+    /// exclusive expiry; a client cannot extend them. Resolution uses the original enrolment
+    /// index, and the durable write shares the UUID-ordered membership locks.
+    pub async fn set_member_role(
+        &self,
+        auth: &Authentication,
+        member: &str,
+        role: crgs::Role,
+        checked_at: u64,
+        valid_until: u64,
+    ) -> Result<()> {
+        crate::text(member)?;
+        self.identity(auth).await?;
+        let checked_at = i64::try_from(checked_at).map_err(|_| Error::InvalidInput)?;
+        let deadline = i64::try_from(valid_until).map_err(|_| Error::InvalidInput)?;
+        if checked_at >= deadline {
+            return Err(Error::InvalidInput);
+        }
+        let row = self
+            .enrol_store
+            .load_subject(member)
+            .await?
+            .ok_or(Error::Transition)?;
+        self.check_record(&row)?;
+        self.set_role_until(auth, row.user(), role, Some(checked_at..deadline))
+            .await
+    }
+
+    async fn set_role_until(
+        &self,
+        auth: &Authentication,
+        target: Uuid,
+        role: crgs::Role,
+        window: Option<std::ops::Range<i64>>,
+    ) -> Result<()> {
         let actor = auth.member();
         let first = actor.min(target);
         let second = actor.max(target);
@@ -793,8 +832,16 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         completing(async move {
             let _guards = (first_guard, second_guard);
             let now = m.now()?;
+            if window.as_ref().is_some_and(|window| !window.contains(&now)) {
+                return Err(Error::Transition);
+            }
             let actor_row = m.authenticated(&auth, now).await?;
             let actor_member = m.active_register_member(&actor_row, now).await?;
+            // A member has no role-management authority. Refuse before looking
+            // at another member's lifecycle, even if its maintenance is due.
+            if actor_member.role == crgs::Role::Member {
+                return Err(Error::Policy);
+            }
             let target_row = m.live(target, now).await?;
             let target_member = m.active_register_member(&target_row, now).await?;
             match actor_member.role {
@@ -802,6 +849,18 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 crgs::Role::Admin
                     if target_member.role != crgs::Role::Root && role != crgs::Role::Root => {}
                 _ => return Err(Error::Policy),
+            }
+            // Locks keep authority stable, but time can advance during reads.
+            // Check the live clock immediately before the durable effect.
+            let current = m.now()?;
+            if current < now
+                || window
+                    .as_ref()
+                    .is_some_and(|window| !window.contains(&current))
+                || current as u64 >= lease_deadline(actor_member.lease_end)?
+                || current as u64 >= lease_deadline(target_member.lease_end)?
+            {
+                return Err(Error::Transition);
             }
             m.register.set_role(&target_row.member_id(), role).await?;
             Ok(())

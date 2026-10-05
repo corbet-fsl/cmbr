@@ -223,3 +223,13 @@ Append `DEVICE_KEYS_SCHEMA` after the application's entire previous migration
 history. The six existing `SCHEMAS` entries, including the historical `cpky` name,
 are unchanged. Bindings persist only public keys and the already-held local
 credential/pseudonym relationship, never names or activity timestamps.
+
+## Pseudonym-based role changes
+
+`set_member_role` resolves the target through the original community enrolment
+index, then uses `set_role`'s ordered actor/target queues and permission policy.
+The trusted service supplies its authentication check time and exclusive session
+expiry. After awaited reads and immediately before the durable register write,
+the live clock must remain inside that window and both current membership leases.
+The request's target role never establishes actor authority. The method neither
+bootstraps the first Root nor issues root-board credentials.

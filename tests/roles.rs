@@ -49,6 +49,10 @@ async fn admin_and_root_rights_use_one_current_persistent_role() {
         m.set_role(&member, member.member(), Role::Root).await,
         Err(Error::Policy)
     );
+    assert_eq!(
+        m.set_role(&member, Uuid::from_u128(999), Role::Admin).await,
+        Err(Error::Policy)
+    );
     m.set_role(&root, admin.member(), Role::Admin)
         .await
         .unwrap();
@@ -189,4 +193,73 @@ async fn pending_lapsed_expired_and_foreign_members_have_no_garden_authority() {
         m.set_role(&root, root.member(), Role::Member).await,
         Err(Error::Transition)
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pseudonym_role_changes_are_scoped_and_expire_while_queued() {
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "roles", clock.clone());
+    let root = admitted(&m, 1).await;
+    let target = admitted(&m, 2).await;
+    seed_role(&db, &m, &root, Role::Root).await;
+    let subject = m.resume(&target).await.unwrap().subject().to_owned();
+    let checked_at = now() as u64;
+    let expiry = checked_at + 60;
+    m.set_member_role(&root, &subject, Role::Admin, checked_at, expiry)
+        .await
+        .unwrap();
+    assert_eq!(m.role(&target).await.unwrap().role(), Role::Admin);
+    assert!(
+        m.set_member_role(
+            &root,
+            &target.member().to_string(),
+            Role::Root,
+            checked_at,
+            expiry
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        m.set_member_role(&root, "missing", Role::Root, checked_at, expiry)
+            .await
+            .is_err()
+    );
+    assert!(
+        m.set_member_role(&root, &subject, Role::Root, expiry, expiry)
+            .await
+            .is_err()
+    );
+    let foreign = facade(&db, "other", clock.clone());
+    assert!(
+        foreign
+            .set_member_role(&root, &subject, Role::Root, checked_at, expiry)
+            .await
+            .is_err()
+    );
+    let held = m.role(&root).await.unwrap();
+    let change = m.set_member_role(&root, &subject, Role::Root, checked_at, expiry);
+    tokio::pin!(change);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut change)
+            .await
+            .is_err()
+    );
+    clock.set(expiry as i64);
+    drop(held);
+    assert_eq!(change.await, Err(Error::Transition));
+    clock.set(now());
+    assert_eq!(m.role(&target).await.unwrap().role(), Role::Admin);
+    clock.set(now() - 1);
+    assert_eq!(
+        m.set_member_role(&root, &subject, Role::Root, checked_at, expiry)
+            .await,
+        Err(Error::Transition)
+    );
+    clock.set(now());
+    m.set_member_role(&root, &subject, Role::Member, checked_at, expiry)
+        .await
+        .unwrap();
+    assert_eq!(m.role(&target).await.unwrap().role(), Role::Member);
 }
