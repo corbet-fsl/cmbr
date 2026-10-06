@@ -39,8 +39,9 @@ pub struct DeviceKeyBinding {
     pub key: [u8; 32],
 }
 
-/// Durable request to advance cplc's epoch before further credential issuance.
-/// Epoch advancement invalidates all credentials that could contain a removed key.
+/// Durable request to publish current revocations before further issuance.
+/// Epoch-bound credentials need an epoch advance; passkey certificates also
+/// require the retained revoked credential IDs in the public revocation list.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Revocation {
     /// Community pseudonym whose authentication or eligibility changed.
@@ -94,7 +95,8 @@ pub trait Storage: Send + Sync {
     fn signal_revocation(&self, member: &str) -> impl Future<Output = Result<()>> + Send;
     /// Bounded pending outbox, in deterministic pseudonym order.
     fn revocations(&self, limit: usize) -> impl Future<Output = Result<Vec<Revocation>>> + Send;
-    /// Clear only after cplc durably advanced its epoch and published fresh trust.
+    /// Clear only after cplc durably retained passkey revocations, advanced its
+    /// epoch and published fresh trust.
     fn acknowledge(&self, event: &Revocation) -> impl Future<Output = Result<()>> + Send;
 }
 pub(crate) fn device_input(member: &str, credential: &[u8], keys: &[[u8; 32]]) -> Result<()> {

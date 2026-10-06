@@ -14,7 +14,7 @@
     "evidence_packages": {
       "cgts": {
         "version": "0.0.0",
-        "source": "git+https://github.com/corbet-libs/cgts?branch=main#22c93bfa5e70e3cdce6c064c5ab2666b9f665de5"
+        "source": "git+https://github.com/corbet-libs/cgts?branch=main#ec2afa901cdf3242509f63063206cc51d6ac3b44"
       }
     }
   },
@@ -33,7 +33,7 @@
     "evidence_packages": {
       "cgts": {
         "version": "0.0.0",
-        "source": "git+https://github.com/corbet-libs/cgts?branch=main#22c93bfa5e70e3cdce6c064c5ab2666b9f665de5"
+        "source": "git+https://github.com/corbet-libs/cgts?branch=main#ec2afa901cdf3242509f63063206cc51d6ac3b44"
       }
     }
   },
@@ -52,7 +52,7 @@
     "evidence_packages": {
       "cgts": {
         "version": "0.0.0",
-        "source": "git+https://github.com/corbet-libs/cgts?branch=main#22c93bfa5e70e3cdce6c064c5ab2666b9f665de5"
+        "source": "git+https://github.com/corbet-libs/cgts?branch=main#ec2afa901cdf3242509f63063206cc51d6ac3b44"
       }
     }
   },
@@ -71,7 +71,7 @@
     "evidence_packages": {
       "cgts": {
         "version": "0.0.0",
-        "source": "git+https://github.com/corbet-libs/cgts?branch=main#22c93bfa5e70e3cdce6c064c5ab2666b9f665de5"
+        "source": "git+https://github.com/corbet-libs/cgts?branch=main#ec2afa901cdf3242509f63063206cc51d6ac3b44"
       }
     }
   }

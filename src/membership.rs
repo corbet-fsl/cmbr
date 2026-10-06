@@ -36,6 +36,26 @@ pub struct PendingAdditionalRegistration {
     authorizer: ckyh::CredentialID,
     pending: ckyh::PendingRegistration,
 }
+/// Genuine registration and certificate preparation under the original member lock.
+/// Keeping this owner alive serializes removal through durable certificate signing.
+pub struct RegisteredPasskey {
+    instance: Arc<()>,
+    enrolment: Record,
+    passkey: ckyh::StoredPasskey,
+    certificate: ckyh::certificate::RegistrationCertificate,
+    observed_at: u64,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+impl RegisteredPasskey {
+    /// Original committed public credential row; its UUID is server routing only.
+    pub fn passkey(&self) -> &ckyh::StoredPasskey {
+        &self.passkey
+    }
+    /// Keyhole-only preparation bound to the actual enrolled pseudonym.
+    pub fn certificate(&self) -> &ckyh::certificate::RegistrationCertificate {
+        &self.certificate
+    }
+}
 /// Server-only single-use login state.
 pub struct PendingLogin {
     ceremony: LoginCeremony,
@@ -53,6 +73,59 @@ pub struct Login {
     pub authentication: Authentication,
     /// Current enrolment, possibly pending or lapsed.
     pub enrolment: Record,
+}
+
+/// Current garden role held under the original member's serialization lease.
+/// Keep this value alive until the authorized garden operation completes.
+/// It is server authority, never a frontend DTO or a profile credential.
+pub struct RoleLease {
+    community: String,
+    member: String,
+    role: crgs::Role,
+    checked_at: u64,
+    valid_until: u64,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// Original member-bound issuance lease. Only this Membership instance (or its
+/// clones) can create it; another member's queue guard cannot authorize a read.
+pub struct MembershipLease {
+    instance: Arc<()>,
+    member: String,
+    user: Uuid,
+    observed_at: u64,
+    valid_until: u64,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl RoleLease {
+    /// Exact source community whose original register authorized this lease.
+    pub fn community(&self) -> &str {
+        &self.community
+    }
+
+    /// Original passport-derived source-community pseudonym. A blind root-board
+    /// issuance proof must match this source member, never a root pseudonym.
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// Authoritative clock at the role check. Consumers reject a regressed clock
+    /// and recheck the exclusive deadline before releasing an authorized result.
+    pub fn checked_at(&self) -> u64 {
+        self.checked_at
+    }
+
+    /// The one current role in the original community register.
+    pub fn role(&self) -> crgs::Role {
+        self.role
+    }
+
+    /// Exclusive membership expiry. The garden must also enforce its own
+    /// session deadline and authoritative clock at the operation boundary.
+    pub fn valid_until(&self) -> u64 {
+        self.valid_until
+    }
 }
 
 /// Current lobby response. Warnings are part of the API, not optional UI policy.
@@ -87,6 +160,7 @@ impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
 pub struct Membership<S, L, C = clbs::SystemClock> {
+    instance: Arc<()>,
     storage: Arc<S>,
     passkeys: Arc<ckyh::Passkeys<ckyh::LibsqlStore>>,
     enrol: Arc<cnrl::Enrol<cnrl::LibsqlStorage>>,
@@ -103,6 +177,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
 impl<S, L, C> Clone for Membership<S, L, C> {
     fn clone(&self) -> Self {
         Self {
+            instance: self.instance.clone(),
             storage: self.storage.clone(),
             passkeys: self.passkeys.clone(),
             enrol: self.enrol.clone(),
@@ -130,7 +205,28 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     pub async fn revocations(&self, limit: usize) -> Result<Vec<crate::Revocation>> {
         self.storage.revocations(limit).await
     }
-    /// Acknowledge only after the matching cplc epoch update and publication.
+    /// Read the retained revoked credential IDs after the signalled mutation
+    /// releases its member lock. Policy must durably union these into its public
+    /// revocations before publishing and acknowledging the outbox generation.
+    pub async fn revoked_passkeys(&self, event: &crate::Revocation) -> Result<Vec<Vec<u8>>> {
+        crate::text(&event.member)?;
+        let row = self
+            .enrol_store
+            .load_subject(&event.member)
+            .await?
+            .ok_or(Error::Transition)?;
+        self.check_record(&row)?;
+        let _guard = crate::storage::member_lock(self.storage.community(), row.user()).await;
+        Ok(self
+            .credentials(row.user())
+            .await?
+            .into_iter()
+            .filter(|key| key.is_revoked())
+            .map(|key| key.credential_id().as_ref().to_vec())
+            .collect())
+    }
+    /// Acknowledge only after the matching cplc epoch and passkey revocation
+    /// update have been durably retained and published.
     pub async fn acknowledge_revocation(&self, event: &crate::Revocation) -> Result<()> {
         self.storage.acknowledge(event).await
     }
@@ -171,6 +267,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             SharedClock(clock.clone()),
         );
         Ok(Self {
+            instance: Arc::new(()),
             storage: Arc::new(storage),
             passkeys: Arc::new(passkeys),
             enrol: Arc::new(enrol),
@@ -218,26 +315,36 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         state: PendingRegistration,
         response: ckyh::RegisterPublicKeyCredential,
     ) -> Result<Record> {
-        let _guard = crate::storage::member_lock(self.storage.community(), state.user).await;
-        async {
-            let now = self.now()?;
-            let row = self.live(state.user, now).await?;
-            if row.state() != State::Started || !self.credentials(state.user).await?.is_empty() {
-                return Err(Error::Transition);
-            }
-            let date = date(now)?;
-            let month = ckyh::CreationMonth::new(date.year() as u16, date.month() as u8)?;
-            let keys = self.passkeys.clone();
-            let receipt =
-                blocking(move || keys.finish_registration(state.pending, &response, month)).await?;
-            // Enrol checks both receipt community and member against this row
-            // before applying the transition.
-            Ok(self
-                .enrol
-                .apply(&row, Event::PasskeyRegistered(&receipt), now)
-                .await?)
+        Ok(self
+            .finish_registration_certified(state, response)
+            .await?
+            .enrolment)
+    }
+
+    /// Complete the real registration while retaining its mutation lease for
+    /// Keyhole certificate signing. A lost response is recovered by authenticating
+    /// the already committed passkey and renewing its certificate, never re-creating it.
+    pub async fn finish_registration_certified(
+        &self,
+        state: PendingRegistration,
+        response: ckyh::RegisterPublicKeyCredential,
+    ) -> Result<RegisteredPasskey> {
+        let now = self.now()?;
+        let guard = crate::storage::member_lock(self.storage.community(), state.user).await;
+        let row = self.live(state.user, now).await?;
+        if row.state() != State::Started || !self.credentials(state.user).await?.is_empty() {
+            return Err(Error::Transition);
         }
-        .await
+        let date = date(now)?;
+        let month = ckyh::CreationMonth::new(date.year() as u16, date.month() as u8)?;
+        let keys = self.passkeys.clone();
+        let receipt =
+            blocking(move || keys.finish_registration(state.pending, &response, month)).await?;
+        let row = self
+            .enrol
+            .apply(&row, Event::PasskeyRegistered(&receipt), now)
+            .await?;
+        self.prepare_certificate(row, receipt, guard, now).await
     }
 
     /// Begin another UV-required passkey for this existing membership.
@@ -275,15 +382,106 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         state: PendingAdditionalRegistration,
         response: ckyh::RegisterPublicKeyCredential,
     ) -> Result<ckyh::StoredPasskey> {
-        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        Ok(self
+            .finish_additional_registration_certified(auth, state, response)
+            .await?
+            .passkey)
+    }
+
+    /// Complete an addition and retain the original registration/revocation lock
+    /// while Policy durably signs Keyhole's certificate for the enrolled pseudonym.
+    pub async fn finish_additional_registration_certified(
+        &self,
+        auth: &Authentication,
+        state: PendingAdditionalRegistration,
+        response: ckyh::RegisterPublicKeyCredential,
+    ) -> Result<RegisteredPasskey> {
+        let now = self.now()?;
+        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         if state.user != auth.member() || state.authorizer != *auth.credential_id() {
             return Err(Error::Identity);
         }
-        self.authenticated(auth, self.now()?).await?;
-        let date = date(self.now()?)?;
+        let row = self.authenticated(auth, now).await?;
+        let date = date(now)?;
         let month = ckyh::CreationMonth::new(date.year() as u16, date.month() as u8)?;
         let keys = self.passkeys.clone();
-        blocking(move || keys.finish_registration(state.pending, &response, month)).await
+        let receipt =
+            blocking(move || keys.finish_registration(state.pending, &response, month)).await?;
+        self.prepare_certificate(row, receipt, guard, now).await
+    }
+
+    /// Renew only the passkey that authenticated this live session. This also
+    /// reconciles a lost first/additional-registration certificate response.
+    pub async fn passkey_certificate(&self, auth: &Authentication) -> Result<RegisteredPasskey> {
+        let now = self.now()?;
+        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let row = self.authenticated(auth, now).await?;
+        let receipt = self
+            .credentials(auth.member())
+            .await?
+            .into_iter()
+            .find(|key| key.credential_id() == auth.credential_id() && !key.is_revoked())
+            .ok_or(Error::Passkey)?;
+        self.prepare_certificate(row, receipt, guard, now).await
+    }
+
+    async fn prepare_certificate(
+        &self,
+        row: Record,
+        passkey: ckyh::StoredPasskey,
+        guard: tokio::sync::OwnedMutexGuard<()>,
+        observed_at: i64,
+    ) -> Result<RegisteredPasskey> {
+        let keys = self.passkeys.clone();
+        let user = row.user();
+        let credential = passkey.credential_id().clone();
+        let pseudonym = row.subject().to_owned();
+        let certificate =
+            blocking(move || keys.registration_certificate(user, &credential, &pseudonym)).await?;
+        let prepared = RegisteredPasskey {
+            instance: self.instance.clone(),
+            enrolment: row,
+            passkey,
+            certificate,
+            observed_at: u64::try_from(observed_at).map_err(|_| Error::InvalidInput)?,
+            _guard: guard,
+        };
+        self.check_certificate(&prepared).await?;
+        Ok(prepared)
+    }
+
+    /// Recheck the original clock/lifecycle after signing awaits, while the same
+    /// mutation lease is held. Returns the checked completion time so the signer
+    /// owner can refuse a certificate that expired during an await. Signature
+    /// persistence alone is not live membership.
+    pub async fn check_certificate(&self, prepared: &RegisteredPasskey) -> Result<u64> {
+        let now = self.now()?;
+        if !Arc::ptr_eq(&self.instance, &prepared.instance)
+            || now < 0
+            || (now as u64) < prepared.observed_at
+            || prepared.enrolment.community() != self.storage.community()
+        {
+            return Err(Error::Identity);
+        }
+        let row = self.enrol.view(prepared.enrolment.user(), now).await?;
+        if row.subject() != prepared.certificate.member() || row.state().is_terminal() {
+            return Err(Error::Transition);
+        }
+        self.unrestricted(row.subject()).await?;
+        if self
+            .credentials(row.user())
+            .await?
+            .iter()
+            .any(|key| key.credential_id() == prepared.passkey.credential_id() && !key.is_revoked())
+        {
+            let completed = self.now()?;
+            if completed < now || row.expires_at().is_some_and(|end| completed >= end) {
+                return Err(Error::Transition);
+            }
+            Ok(completed as u64)
+        } else {
+            Err(Error::Passkey)
+        }
     }
 
     /// Private credential-first login. The wallet supplies its stored key ID;
@@ -694,6 +892,142 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         .await
     }
 
+    /// Read garden authority from a live passkey and current admitted membership.
+    /// Acquire any outer policy lock before this lease, as credential issuance
+    /// does. Holding the lease prevents demotion, lapse and passkey revocation
+    /// from racing the operation. Ordinary member APIs do not use this privilege.
+    pub async fn role(&self, auth: &Authentication) -> Result<RoleLease> {
+        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let now = self.now()?;
+        let row = self.authenticated(auth, now).await?;
+        let member = self.active_register_member(&row, now).await?;
+        Ok(RoleLease {
+            community: self.community().into(),
+            member: row.subject().into(),
+            role: member.role,
+            checked_at: now as u64,
+            valid_until: lease_deadline(member.lease_end)?,
+            _guard: guard,
+        })
+    }
+
+    /// Assign the original register role through a current garden actor.
+    /// Admins may assign/remove admins; only roots may assign/remove roots.
+    /// Both memberships are serialized in UUID order through the durable write.
+    /// No role history or public badge is recorded.
+    pub async fn set_role(
+        &self,
+        auth: &Authentication,
+        target: Uuid,
+        role: crgs::Role,
+    ) -> Result<()> {
+        self.set_role_until(auth, target, role, None).await
+    }
+
+    /// Change a role using the community pseudonym exposed by the lobby.
+    /// The service supplies its authentication check time and current session's
+    /// exclusive expiry; a client cannot extend them. Resolution uses the original enrolment
+    /// index, and the durable write shares the UUID-ordered membership locks.
+    pub async fn set_member_role(
+        &self,
+        auth: &Authentication,
+        member: &str,
+        role: crgs::Role,
+        checked_at: u64,
+        valid_until: u64,
+    ) -> Result<()> {
+        crate::text(member)?;
+        self.identity(auth).await?;
+        let checked_at = i64::try_from(checked_at).map_err(|_| Error::InvalidInput)?;
+        let deadline = i64::try_from(valid_until).map_err(|_| Error::InvalidInput)?;
+        if checked_at >= deadline {
+            return Err(Error::InvalidInput);
+        }
+        let row = self
+            .enrol_store
+            .load_subject(member)
+            .await?
+            .ok_or(Error::Transition)?;
+        self.check_record(&row)?;
+        self.set_role_until(auth, row.user(), role, Some(checked_at..deadline))
+            .await
+    }
+
+    async fn set_role_until(
+        &self,
+        auth: &Authentication,
+        target: Uuid,
+        role: crgs::Role,
+        window: Option<std::ops::Range<i64>>,
+    ) -> Result<()> {
+        let actor = auth.member();
+        let first = actor.min(target);
+        let second = actor.max(target);
+        let first_guard = crate::storage::member_lock(self.storage.community(), first).await;
+        let second_guard = if first == second {
+            None
+        } else {
+            Some(crate::storage::member_lock(self.storage.community(), second).await)
+        };
+        let m = self.clone();
+        let auth = auth.clone();
+        completing(async move {
+            let _guards = (first_guard, second_guard);
+            let now = m.now()?;
+            if window.as_ref().is_some_and(|window| !window.contains(&now)) {
+                return Err(Error::Transition);
+            }
+            let actor_row = m.authenticated(&auth, now).await?;
+            let actor_member = m.active_register_member(&actor_row, now).await?;
+            // A member has no role-management authority. Refuse before looking
+            // at another member's lifecycle, even if its maintenance is due.
+            if actor_member.role == crgs::Role::Member {
+                return Err(Error::Policy);
+            }
+            let target_row = m.live(target, now).await?;
+            let target_member = m.active_register_member(&target_row, now).await?;
+            match actor_member.role {
+                crgs::Role::Root => {}
+                crgs::Role::Admin
+                    if target_member.role != crgs::Role::Root && role != crgs::Role::Root => {}
+                _ => return Err(Error::Policy),
+            }
+            // Locks keep authority stable, but time can advance during reads.
+            // Check the live clock immediately before the durable effect.
+            let current = m.now()?;
+            if current < now
+                || window
+                    .as_ref()
+                    .is_some_and(|window| !window.contains(&current))
+                || current as u64 >= lease_deadline(actor_member.lease_end)?
+                || current as u64 >= lease_deadline(target_member.lease_end)?
+            {
+                return Err(Error::Transition);
+            }
+            m.register.set_role(&target_row.member_id(), role).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn active_register_member(&self, row: &Record, now: i64) -> Result<crgs::Member> {
+        self.check_record(row)?;
+        if row.state() != State::Admitted {
+            return Err(Error::Transition);
+        }
+        let member = self
+            .register
+            .member(&row.member_id())
+            .await?
+            .ok_or(Error::Transition)?;
+        let today = date(now)?;
+        let month = crgs::YearMonth::new(today.year() as u16, today.month() as u8)?;
+        if member.handle.is_none() || member.lease_end < month {
+            return Err(Error::Transition);
+        }
+        Ok(member)
+    }
+
     /// Return the canonical reserved or admitted handle for the lobby.
     pub async fn handle(&self, auth: &Authentication) -> Result<Option<crgs::Handle>> {
         async {
@@ -763,15 +1097,21 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         auth: &Authentication,
         credential: ckyh::CredentialID,
     ) -> Result<Record> {
-        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
-        async {
-            let row = self.authenticated(auth, self.now()?).await?;
-            let keys = self.passkeys.clone();
+        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let membership = self.clone();
+        let auth = auth.clone();
+        completing(async move {
+            // The synchronous Keyhole write can outlive a cancelled request.
+            // Keep its lock until completion so outbox projection cannot read
+            // and acknowledge the pre-mutation signal while that write runs.
+            let _guard = guard;
+            let row = membership.authenticated(&auth, membership.now()?).await?;
+            let keys = membership.passkeys.clone();
             let user = row.user();
-            self.storage.signal_revocation(row.subject()).await?;
+            membership.storage.signal_revocation(row.subject()).await?;
             blocking(move || keys.revoke(user, &credential)).await?;
-            self.release_if_lost(row, self.now()?).await
-        }
+            membership.release_if_lost(row, membership.now()?).await
+        })
         .await
     }
 
@@ -979,7 +1319,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
 impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
     cplc::MembershipSource for Membership<S, L, C>
 {
-    type Lease = tokio::sync::OwnedMutexGuard<()>;
+    type Lease = MembershipLease;
     async fn membership(
         &self,
         member: &str,
@@ -1047,11 +1387,61 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                     lease_end: lease_end as u64,
                     authorized_devices: self.live_device_keys(&row).await?,
                 },
-                guard,
+                MembershipLease {
+                    instance: self.instance.clone(),
+                    member: member.into(),
+                    user: row.user(),
+                    observed_at: now,
+                    valid_until: lease_end as u64,
+                    _guard: guard,
+                },
             ))
         }
         .await;
         read.map_err(|_| cplc::Error::Invalid("membership source unavailable"))
+    }
+}
+
+impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
+    cplc::PasskeySource for Membership<S, L, C>
+{
+    async fn passkey(
+        &self,
+        member: &str,
+        credential_id: &[u8],
+        lease: &Self::Lease,
+        at: u64,
+    ) -> cplc::Result<ckyh::lineage::PublicCredential> {
+        let read: Result<_> = async {
+            let now = u64::try_from(self.now()?).map_err(|_| Error::InvalidInput)?;
+            if now != at
+                || !Arc::ptr_eq(&self.instance, &lease.instance)
+                || lease.member != member
+                || now < lease.observed_at
+                || now >= lease.valid_until
+                || credential_id.is_empty()
+                || credential_id.len() > 1024
+            {
+                return Err(Error::Identity);
+            }
+            // The retained original queue lease serializes registration/removal;
+            // check current lifecycle, legal restrictions and pending revocation
+            // again after Policy's awaits and before exporting the exact live key.
+            let row = self.enrol.view(lease.user, now as i64).await?;
+            if row.subject() != member
+                || row.state() != State::Admitted
+                || self.storage.revocation_pending(member).await?
+            {
+                return Err(Error::Restricted);
+            }
+            self.unrestricted(member).await?;
+            let keys = self.passkeys.clone();
+            let user = lease.user;
+            let id = ckyh::CredentialID::from(credential_id.to_vec());
+            blocking(move || keys.registered_public_credential(user, &id)).await
+        }
+        .await;
+        read.map_err(|_| cplc::Error::Invalid("passkey source unavailable"))
     }
 }
 
@@ -1061,6 +1451,19 @@ fn date(now: i64) -> Result<DateTime<Utc>> {
         return Err(Error::InvalidInput);
     }
     Ok(date)
+}
+
+fn lease_deadline(month: crgs::YearMonth) -> Result<u64> {
+    let start = chrono::NaiveDate::from_ymd_opt(month.year().into(), month.month().into(), 1)
+        .ok_or(Error::InvalidInput)?;
+    let end = start
+        .checked_add_months(chrono::Months::new(1))
+        .ok_or(Error::InvalidInput)?;
+    Ok(end
+        .and_hms_opt(0, 0, 0)
+        .ok_or(Error::InvalidInput)?
+        .and_utc()
+        .timestamp() as u64)
 }
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> std::result::Result<T, ckyh::Error> + Send + 'static,

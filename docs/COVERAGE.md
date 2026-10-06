@@ -37,7 +37,7 @@ capability remains necessary before this workflow can complete.
 
 The four lines after the encoded spend verifier are unreachable in the current
 resolved owner graph. They are not an enabled PIN-change implementation. The
-[exact cgts verifier](https://github.com/corbet-libs/cgts/blob/22c93bfa5e70e3cdce6c064c5ab2666b9f665de5/src/pins.rs)
+[exact cgts verifier](https://github.com/corbet-libs/cgts/blob/ec2afa901cdf3242509f63063206cc51d6ac3b44/src/pins.rs)
 validates the canonical binding and then unconditionally returns
 `ExtensionsUnavailable`; its `SpentChange` is sealed, non-deserializable and has
 no public constructor. Neither arbitrary wire bytes nor dependency feature
