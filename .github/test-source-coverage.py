@@ -169,7 +169,7 @@ class ExceptionTests(unittest.TestCase):
             self.check([line, first, self.branch])
 
     def proof_dependency(self):
-        identity = {'version': '0.0.0', 'source': 'git+https://github.com/corbet-foss/proof?branch=main#' + 'a' * 40}
+        identity = {'version': '0.0.0', 'source': 'git+https://git.corbet.ch/corbet-foss/proof?branch=main#' + 'a' * 40}
         text = '[[package]]\nname = "proof"\nversion = "0.0.0"\nsource = "' + identity['source'] + '"\n'
         (self.root / 'Cargo.lock').write_text(text)
         return self.branch | {'evidence_packages': {'proof': identity}}, text
