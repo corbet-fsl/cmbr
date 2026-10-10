@@ -45,8 +45,7 @@ def rejects(function, value):
     raise AssertionError(f'Invalid input accepted: {value!r}')
 
 
-def self_test():
-    repo = 'https://github.com/corbet-foss/example'
+def self_test_for(repo):
     source = 'git+' + repo + '?branch=main#' + 'a' * 40
     package = {'name': 'example', 'source': source}
     check_lock([package])
@@ -66,6 +65,12 @@ def self_test():
                         {'git': repo, 'branch': 'main', 'tag': 'v1'}):
         rejects(check_manifest, {'target': {'cfg(wasm)': {'dependencies': {'alias': declaration}}}})
     check_manifest({'workspace': {'dependencies': {'alias': {'git': repo, 'package': 'example', 'branch': 'main'}}}})
+
+
+def self_test():
+    for domain in ('git.corbet.ch', 'github.com'):
+        for organization in ('corbet-foss', 'corbet-libs', 'cmtymeet'):
+            self_test_for(f'https://{domain}/{organization}/example')
 
 
 if __name__ == '__main__':

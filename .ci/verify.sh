@@ -5,6 +5,8 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
 export CARGO_HTTP_USER_AGENT="${CARGO_HTTP_USER_AGENT:-dependency-ci}"
 
+python3 -B .ci/test-resolve-dependencies.py
+
 rustc --version
 cargo fmt --all --check
 node --test .github/check-pins.test.mjs
