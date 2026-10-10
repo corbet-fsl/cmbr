@@ -2,7 +2,7 @@
 name = "cmbr"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Membership facade of cvld: register, passkeys, enrolment and pins per community member"
 license = "FSL-1.1-ALv2"
 repository = "https://git.corbet.ch/corbet-libs/cmbr"
