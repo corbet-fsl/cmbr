@@ -2,8 +2,8 @@
 
 CI resolves one fresh Cargo.lock and uses that snapshot for stable checks,
 advisory policy and nightly LLVM branch instrumentation. Both line and branch
-counts must be complete; any reachable gap fails the gate. Only the four disabled PIN continuation lines described below are
-proposed for exclusion. Only test harness files (`tests/` and `tests.rs`) are omitted from
+counts must be complete; any reachable gap fails the gate. Only the four disabled PIN continuation lines described below have a
+reviewed exclusion. Only test harness files (`tests/` and `tests.rs`) are omitted from
 the measured source; their actual round trips still execute.
 
 A configured gate is not a coverage result. The raw report is retained on failure.
@@ -15,8 +15,8 @@ summaries and emitted branch locations against the companion JSON. Missing,
 duplicate, empty or malformed evidence cannot pass. Raw JSON totals remain
 as diagnostic evidence for generic instantiations; source coverage does not
 claim every generic instantiation is covered. Both artifacts are retained on
-failure. No production source exclusions are currently approved; the proposal below
-requires independent review.
+failure. The four-line exception below was independently reviewed against the resolved
+owner implementation. No other production source is excluded.
 
 The registration facade delegates receipt community/member validation to
 `cnrl::Enrol::apply(Event::PasskeyRegistered)`, which checks both against the
@@ -49,7 +49,7 @@ signed and replayed bytes; the revision-overflow vector reaches binding refusal.
 No fake spend or accepting adapter substitutes for the accounting owner.
 
 Only the four source counters for the inaccessible `Pins::change` continuation
-are proposed for exclusion. Every line/branch inventory is still reconciled
+have a reviewed exclusion. Every line/branch inventory is still reconciled
 across the same-execution JSON, LCOV and annotated reports. Entries bind the
 complete membership implementation and its actual integration tests, plus the
 exact unique cgts version/full Git source in the resolved Cargo.lock. The proof
@@ -59,7 +59,8 @@ supporting source/owner revision, fails the gate and requires renewed review.
 Unrelated dependency updates still run the complete real test/coverage suite. No branch
 or whole function is excluded. The owner source SHA-256 is `3d45c3322a344db24b3dae20de2197cf1b2c4c6b6db7c86f90270c0e8f1cad87`.
 
-Independent review is required. This exception does not satisfy the blocked
+The renewed evidence was independently reviewed on 2026-10-10. This exception
+does not satisfy the blocked
 positive PIN-change workflow: when the owner releases a real spend capability,
 remove the exception and execute actual accepted-spend, replay and crash tests.
 
