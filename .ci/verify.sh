@@ -6,6 +6,7 @@ export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
 export CARGO_HTTP_USER_AGENT="${CARGO_HTTP_USER_AGENT:-dependency-ci}"
 
 python3 -B .ci/test-resolve-dependencies.py
+python3 -B .ci/test-passkey-controls.py
 
 rustc --version
 cargo fmt --all --check
@@ -13,6 +14,7 @@ node --test .github/check-pins.test.mjs
 cargo metadata --locked --format-version 1 > dependency-metadata.json
 node .github/check-pins.mjs dependency-metadata.json
 cargo clippy --locked --all-targets -- -D warnings
+python3 -B .ci/passkey-controls.py
 cargo test --locked
 
 python3 .github/check-first-party.py

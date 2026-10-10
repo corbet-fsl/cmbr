@@ -49,8 +49,9 @@ changes to cplc before further credentials can be signed.
 
 ## Dependency survey
 
-Surveyed crates.io and GitHub on 2026-09-30; leaf READMEs and implemented contracts
-were read before integration. Exact revisions are in `Cargo.toml`.
+Surveyed crates.io and upstream repositories on 2026-09-30; leaf READMEs and implemented contracts
+were read before integration. Compatible ranges and first-party main branches are
+declared in `Cargo.toml`; exact resolved revisions are retained in `Cargo.lock`.
 
 | Candidate | Choice and reason |
 |---|---|
@@ -70,7 +71,7 @@ No cryptographic primitive or leaf execution logic is reimplemented.
 
 ## Verification and remaining integration
 
-GitHub Actions runs stable Rust formatting, strict all-target Clippy and real
+CI runs stable Rust formatting, strict all-target Clippy and real
 libSQL round trips. Tests exercise WebAuthn, state/resume, policy, pins, confirmed
 self-ban, isolation, failures, crashes, recovery and indexes. Coordination also
 runs against its memory implementation. External self-ban verifier
@@ -80,7 +81,8 @@ The development gate exists only in tests, with no production feature or provide
 The optional Turso test skips unless **both** `TURSO_URL` and `TURSO_TOKEN` are
 nonempty. Supply only a disposable test database: migrations and synthetic records
 are written. Credentials are never configured in source or public CI. The CI
-artifact retains the resolved lockfile; builds run only on GitHub Actions.
+resolver retains the resolved lockfile before a separate locked verification;
+builds run only in CI.
 Never publish this crate to a registry.
 
 Open: proven cblc extension circuit and intent-bound self-ban verifier adapters; approved

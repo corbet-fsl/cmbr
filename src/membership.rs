@@ -240,6 +240,14 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         .await
     }
 
+    /// Read this authenticated membership's passkeys, including tombstones.
+    /// The host selects its public projection; this creates no access history.
+    pub async fn passkeys(&self, auth: &Authentication) -> Result<Vec<ckyh::StoredPasskey>> {
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let row = self.authenticated(auth, self.now()?).await?;
+        self.credentials(row.user()).await
+    }
+
     /// Begin another UV-required passkey for this existing membership.
     /// The service validates session lifetime. No new pseudonym, membership,
     /// manual approval or recovery path is created.

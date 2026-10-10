@@ -20,17 +20,26 @@ async fn last_key_revocation_releases_but_preserves_committed_retention() {
     .await
     .unwrap();
     let credential = m
-        .credentials(USER)
+        .passkeys(&login.authentication)
         .await
         .unwrap()
         .pop()
         .unwrap()
         .credential_id()
         .clone();
+    let foreign = facade(&db, "other-community", clock.clone());
+    assert!(
+        foreign.passkeys(&login.authentication).await.is_err(),
+        "membership passkey listing requires current scoped authentication"
+    );
     let released = m
         .revoke_passkey(&login.authentication, credential)
         .await
         .unwrap();
+    assert!(
+        m.passkeys(&login.authentication).await.is_err(),
+        "membership passkey listing requires current scoped authentication"
+    );
     assert_eq!(released.state(), State::Released);
     assert_eq!(m.resume(&login.authentication).await, Err(Error::Passkey));
     assert_eq!(m.release(USER).await.unwrap().state(), State::Released);
