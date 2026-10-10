@@ -8,8 +8,12 @@ use cpns::server::{Pin, Pins};
 use crate::{Error, Result, Storage};
 use cnrl::{Event, Record, State, Storage as _};
 
+mod self_ban_confirmation;
+pub use self_ban_confirmation::{ConfirmedSelfBan, PendingSelfBanConfirmation};
 mod certificate;
 pub use certificate::RegisteredPasskey;
+mod self_ban_status;
+pub use self_ban_status::{PendingSelfBanStatus, SelfBanStatus};
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
@@ -98,7 +102,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
     register: Arc<crgs::Register<crgs::LibsqlStorage>>,
     register_store: crgs::LibsqlStorage,
     pins: Arc<Pins<cpns::server::libsql::LibsqlStore, PinSpendVerifier>>,
-    legal: Arc<clbs::Gate<cgts::legal_storage::LibsqlStore, L, SharedClock<C>>>,
+    legal: Arc<clbs::Gate<crate::legal_storage::LegalStore<S>, L, SharedClock<C>>>,
     clock: Arc<C>,
     action: String,
     lease_months: u32,
@@ -170,14 +174,15 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             PinSpendVerifier,
         );
         let clock = Arc::new(clock);
+        let storage = Arc::new(storage);
         let legal = clbs::Gate::new(
-            cgts::legal_storage::LibsqlStore::new(db, community)?,
+            crate::legal_storage::LegalStore::new(db, storage.clone())?,
             legal,
             SharedClock(clock.clone()),
         );
         Ok(Self {
             instance: Arc::new(()),
-            storage: Arc::new(storage),
+            storage,
             passkeys: Arc::new(passkeys),
             enrol: Arc::new(enrol),
             enrol_store,
@@ -834,7 +839,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             {
                 return Err(Error::Identity);
             }
-            self.storage.signal_revocation(row.subject()).await?;
             self.legal.self_ban(order).await?;
             self.sync(row.user(), self.now()?).await
         }

@@ -92,6 +92,17 @@ pub trait Storage: Send + Sync {
     /// Mark a security change before its leaf mutation. Conservative invalidation
     /// after a refused mutation is safe; losing a committed revocation is not.
     fn signal_revocation(&self, member: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Queue a notice inside the trusted legal adapter's same-community
+    /// transaction. A store that cannot join that transaction must refuse;
+    /// independently writing memory or another database is not atomic.
+    /// This default keeps unsupported caller stores explicitly unavailable.
+    fn signal_revocation_transaction(
+        &self,
+        _transaction: &mut crlt::Transaction,
+        _member: &str,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Err(Error::Unavailable))
+    }
     /// Bounded pending outbox, in deterministic pseudonym order.
     fn revocations(&self, limit: usize) -> impl Future<Output = Result<Vec<Revocation>>> + Send;
     /// Clear only after cplc durably advanced its epoch and published fresh trust.
@@ -402,28 +413,19 @@ impl Storage for LibsqlStorage {
     async fn signal_revocation(&self, member: &str) -> Result<()> {
         crate::text(member)?;
         let mut tx = self.scope.tx().await?;
-        let rows = tx
-            .query(
-                "SELECT generation FROM cmbr_revocations WHERE subject = ?1",
-                [member],
-            )
-            .await?;
-        if let Some(row) = rows.first() {
-            let next = row.get_i64(0)?.checked_add(1).ok_or(Error::Unavailable)?;
-            tx.execute(
-                "UPDATE cmbr_revocations SET generation = ?1, pending = 1 WHERE subject = ?2",
-                params![next, member],
-            )
-            .await?;
-        } else {
-            tx.execute(
-                "INSERT INTO cmbr_revocations (subject, generation) VALUES (?1, 1)",
-                [member],
-            )
-            .await?;
-        }
+        signal_revocation_tx(&mut tx, member).await?;
         tx.commit().await?;
         Ok(())
+    }
+    async fn signal_revocation_transaction(
+        &self,
+        transaction: &mut crlt::Transaction,
+        member: &str,
+    ) -> Result<()> {
+        if !transaction.belongs_to(&self.scope) {
+            return Err(Error::Identity);
+        }
+        signal_revocation_tx(transaction, member).await
     }
     async fn revocations(&self, count: usize) -> Result<Vec<Revocation>> {
         self.scope
@@ -456,6 +458,33 @@ impl Storage for LibsqlStorage {
             .await?;
         Ok(())
     }
+}
+
+async fn signal_revocation_tx(transaction: &mut crlt::Transaction, member: &str) -> Result<()> {
+    crate::text(member)?;
+    let rows = transaction
+        .query(
+            "SELECT generation FROM cmbr_revocations WHERE subject = ?1",
+            [member],
+        )
+        .await?;
+    if let Some(row) = rows.first() {
+        let next = row.get_i64(0)?.checked_add(1).ok_or(Error::Unavailable)?;
+        transaction
+            .execute(
+                "UPDATE cmbr_revocations SET generation = ?1, pending = 1 WHERE subject = ?2",
+                params![next, member],
+            )
+            .await?;
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO cmbr_revocations (subject, generation) VALUES (?1, 1)",
+                [member],
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 // A process-local per-member queue; no guard survives cancellation/error/process

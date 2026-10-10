@@ -4,14 +4,16 @@
 //! `docs/CONTRACT.md` for authenticated inputs, coordination and recovery.
 #![forbid(unsafe_code)]
 
+mod legal_storage;
 mod membership;
 mod pins;
 pub use pins::PinV2;
 mod storage;
 
 pub use membership::{
-    Config, Lobby, Login, Membership, PendingAdditionalRegistration, PendingLogin,
-    PendingRegistration, RegisteredPasskey, Warning,
+    Config, ConfirmedSelfBan, Lobby, Login, Membership, PendingAdditionalRegistration,
+    PendingLogin, PendingRegistration, PendingSelfBanConfirmation, PendingSelfBanStatus,
+    RegisteredPasskey, SelfBanStatus, Warning,
 };
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,
