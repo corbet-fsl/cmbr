@@ -94,7 +94,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
     register: Arc<crgs::Register<crgs::LibsqlStorage>>,
     register_store: crgs::LibsqlStorage,
     pins: Arc<Pins<cpns::server::libsql::LibsqlStore, PinSpendVerifier>>,
-    legal: Arc<clbs::Gate<clbs::LibsqlStore, L, SharedClock<C>>>,
+    legal: Arc<clbs::Gate<cgts::legal_storage::LibsqlStore, L, SharedClock<C>>>,
     clock: Arc<C>,
     action: String,
     lease_months: u32,
@@ -166,7 +166,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         );
         let clock = Arc::new(clock);
         let legal = clbs::Gate::new(
-            clbs::LibsqlStore::new(db, community)?,
+            cgts::legal_storage::LibsqlStore::new(db, community)?,
             legal,
             SharedClock(clock.clone()),
         );

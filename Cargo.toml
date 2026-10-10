@@ -5,23 +5,23 @@ edition = "2024"
 rust-version = "1.88"
 description = "Membership facade of cvld: register, passkeys, enrolment and pins per community member"
 license = "FSL-1.1-ALv2"
-repository = "https://github.com/corbet-libs/cmbr"
+repository = "https://git.corbet.ch/corbet-libs/cmbr"
 readme = "README.md"
 publish = false
 include = ["Cargo.toml", "src/**", "docs/**", "README.md", "LICENSE.md"]
 
 [dependencies]
 ed25519-dalek = "2.2"
-cplc = { git = "https://github.com/corbet-libs/cplc", branch = "main" }
-cgts = { git = "https://github.com/corbet-libs/cgts", branch = "main" }
-cgrd = { git = "https://github.com/corbet-foss/cgrd", branch = "main", default-features = false }
-crlt = { git = "https://github.com/corbet-foss/crlt", branch = "main" }
-crgs = { git = "https://github.com/corbet-foss/crgs", branch = "main" }
-ckyh = { git = "https://github.com/corbet-foss/ckyh", branch = "main" }
-cnrl = { git = "https://github.com/corbet-foss/cnrl", branch = "main" }
-cpns = { git = "https://github.com/corbet-foss/cpns", branch = "main" }
-clbs = { git = "https://github.com/corbet-foss/clbs", branch = "main" }
-crbk = { git = "https://github.com/corbet-foss/crbk", branch = "main" }
+cplc = { git = "https://git.corbet.ch/corbet-libs/cplc", branch = "main" }
+cgts = { git = "https://git.corbet.ch/corbet-libs/cgts", branch = "main" }
+cgrd = { git = "https://git.corbet.ch/corbet-foss/cgrd", branch = "main", default-features = false }
+crlt = { git = "https://git.corbet.ch/corbet-foss/crlt", branch = "main" }
+crgs = { git = "https://git.corbet.ch/corbet-foss/crgs", branch = "main" }
+ckyh = { git = "https://git.corbet.ch/corbet-foss/ckyh", branch = "main" }
+cnrl = { git = "https://git.corbet.ch/corbet-foss/cnrl", branch = "main" }
+cpns = { git = "https://git.corbet.ch/corbet-foss/cpns", branch = "main" }
+clbs = { git = "https://git.corbet.ch/corbet-foss/clbs", branch = "main" }
+crbk = { git = "https://git.corbet.ch/corbet-foss/crbk", branch = "main" }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Execute the manifest's selected checks with content-keyed result reuse.
 set -euo pipefail
+exec 2>&1
 : "${CCID_BIN:?Missing verified ccid job runtime}"
 : "${CI_COMMIT_SHA:?Missing verified source revision}"
 : "${CI_REPOSITORY_URL:?Missing canonical repository identity}"
@@ -54,6 +55,8 @@ cargo_bin=$("$CARGO_HOME/bin/rustup" which --toolchain stable cargo)
 test -x "$cargo_bin"
 export PATH="$(dirname "$cargo_bin"):$PATH"
 export CCID_SOURCE_REVISION="$CI_COMMIT_SHA"
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$state/release-artifacts}"
+mkdir -p "$ARTIFACT_ROOT"
 "$CCID_BIN" render --repo "$PWD" --check
 proto --version
 moon --version

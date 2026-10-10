@@ -92,3 +92,7 @@ SQL/HTTP tracing and proxy body logging must stay disabled in the service.
 ## License
 
 Licensed under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE.md).
+
+Live Turso probes are explicitly ignored by default. Credentials alone do not
+authorize network execution; an authorized operator must select the ignored test.
+Local real database and signature tests remain part of the normal CI suite.

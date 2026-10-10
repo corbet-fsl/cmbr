@@ -30,7 +30,7 @@ pub const SCHEMAS: [(&str, &str); 6] = [
     ("crgs", crgs::SCHEMA),
     ("cnrl", cnrl::SCHEMA),
     ("cpns", cpns::server::libsql::SCHEMA),
-    ("clbs", clbs::SCHEMA),
+    ("clbs", cgts::legal_storage::SCHEMA),
 ];
 
 /// A sanitized facade failure; no underlying request or database error is kept.

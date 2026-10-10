@@ -2,6 +2,7 @@
 mod common;
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires explicit authorized live-service execution"]
 async fn optional_real_turso() {
     let (Ok(url), Ok(token)) = (std::env::var("TURSO_URL"), std::env::var("TURSO_TOKEN")) else {
         eprintln!("skip: TURSO_URL and TURSO_TOKEN are required");
