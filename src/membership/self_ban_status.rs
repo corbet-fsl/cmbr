@@ -1,5 +1,6 @@
 //! Fresh original passkey ownership permits only reading one's terminal receipt.
 use super::{Error, Membership, Result, Storage, blocking};
+use cnrl::Storage as _;
 use std::time::{Duration, Instant};
 
 /// A dedicated discoverable receipt ceremony. No login/session state can be
