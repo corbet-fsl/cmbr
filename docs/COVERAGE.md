@@ -37,7 +37,7 @@ capability remains necessary before this workflow can complete.
 
 The four lines after the encoded spend verifier are unreachable in the current
 resolved owner graph. They are not an enabled PIN-change implementation. The
-[exact cgts verifier](https://git.corbet.ch/corbet-libs/cgts/src/commit/91422c91306da38a74f5122c84e586dfcabeb527/src/pins.rs)
+[exact cgts verifier](https://git.corbet.ch/corbet-libs/cgts/src/commit/ed05954fac484abe7568cd32a9fdbda1ce4c7891/src/pins.rs)
 validates the canonical binding and then unconditionally returns
 `ExtensionsUnavailable`; its `SpentChange` is sealed, non-deserializable and has
 no public constructor. Neither arbitrary wire bytes nor dependency feature
@@ -64,7 +64,7 @@ does not satisfy the blocked
 positive PIN-change workflow: when the owner releases a real spend capability,
 remove the exception and execute actual accepted-spend, replay and crash tests.
 
-The canonical dependency migration rechecked this same owner file at `91422c9`: its
-SHA-256 above is unchanged. The membership source change only relocates the host
-legal storage type and constructor; PIN verification and the four continuation
-lines remain unchanged. The exception inventory is unchanged.
+The current dependency resolution rechecked this same owner file at `ed05954`: its
+SHA-256 above is unchanged. The authenticated passkey-listing addition moves the
+four continuation lines without changing PIN verification or their code. Source
+and lifecycle-test hashes were reviewed again; the exception inventory is unchanged.
