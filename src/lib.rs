@@ -11,7 +11,7 @@ mod storage;
 
 pub use membership::{
     Config, Lobby, Login, Membership, PendingAdditionalRegistration, PendingLogin,
-    PendingRegistration, Warning,
+    PendingRegistration, RegisteredPasskey, Warning,
 };
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,

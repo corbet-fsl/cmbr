@@ -8,6 +8,9 @@ use cpns::server::{Pin, Pins};
 use crate::{Error, Result, Storage};
 use cnrl::{Event, Record, State, Storage as _};
 
+mod certificate;
+pub use certificate::RegisteredPasskey;
+
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
     /// Pending registration duration, in whole UTC days.
@@ -87,6 +90,7 @@ impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
 pub struct Membership<S, L, C = clbs::SystemClock> {
+    instance: Arc<()>,
     storage: Arc<S>,
     passkeys: Arc<ckyh::Passkeys<ckyh::LibsqlStore>>,
     enrol: Arc<cnrl::Enrol<cnrl::LibsqlStorage>>,
@@ -103,6 +107,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
 impl<S, L, C> Clone for Membership<S, L, C> {
     fn clone(&self) -> Self {
         Self {
+            instance: self.instance.clone(),
             storage: self.storage.clone(),
             passkeys: self.passkeys.clone(),
             enrol: self.enrol.clone(),
@@ -171,6 +176,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             SharedClock(clock.clone()),
         );
         Ok(Self {
+            instance: Arc::new(()),
             storage: Arc::new(storage),
             passkeys: Arc::new(passkeys),
             enrol: Arc::new(enrol),
