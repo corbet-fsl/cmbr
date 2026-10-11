@@ -24,6 +24,35 @@ passkey permanently releases the lifecycle; it does not erase a retained handle.
 Credential-first and discoverable login delegate verification/counters to ckyh and records no login
 time. UUIDs and pseudonyms are service-authenticated community-local bindings.
 
+## Initial creation provenance
+
+Both ordinary `begin_registration` and seeded `begin_initial_registration` use
+Keyhole's atomic first-only insertion. The seeded path receives a caller-owned
+nonzero 32-byte opaque per-community commitment before the original WebAuthn
+ceremony. Neither additional keys nor legacy records can acquire a replacement
+commitment. No raw root, signed publication, private evidence or signing authority
+is accepted by this integration.
+
+Authenticated `initial_creation` and `bind_initial_publication` require the exact
+original key and the host's ORIGINAL session/ceremony exclusive expiry. The
+Keyhole transaction checks current key ownership/revocation and immutable digest
+binding; equal retry succeeds, a different winner refuses. Membership rechecks
+the actual enrolment, legal restriction, latest wall-clock floor and original
+monotonic bound after awaits, including after a durable bind. A refused response
+does not erase a committed winner. Fresh original-key authentication can read it
+after a lost reply; absent private candidate/evidence is never reconstructed.
+
+The nonclone, nonserializable `InitialCreationState` retains the exact member
+lease, authentication, owner instance and original expiry. Call
+`check_initial_creation` after host awaits, then sample the host clock and call
+`is_current` synchronously before projecting only opaque seed/publication and
+checked time. The host must also check its current session and policy; these
+metadata are not admission or signing capabilities. A failed or cancelled check
+poisons that sealed result. Drop it before another member-lock operation; do not
+reenter session operations that acquire the same lease. Store transactions fence
+first registration and publication across pools; the RAM member queue alone
+does not establish cross-process first-key uniqueness.
+
 ## No return and lobby
 
 The product rule is **NO RETURN**. Expired registration, loss of all passkeys,

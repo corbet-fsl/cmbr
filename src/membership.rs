@@ -14,6 +14,8 @@ mod certificate;
 pub use certificate::RegisteredPasskey;
 mod self_ban_status;
 pub use self_ban_status::{PendingSelfBanStatus, SelfBanStatus};
+mod initial_creation;
+pub use initial_creation::InitialCreationState;
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
@@ -205,6 +207,15 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         user: Uuid,
         pseudonym: &str,
     ) -> Result<(ckyh::CreationChallengeResponse, PendingRegistration)> {
+        self.initial_registration(user, pseudonym, None).await
+    }
+
+    async fn initial_registration(
+        &self,
+        user: Uuid,
+        pseudonym: &str,
+        seed: Option<[u8; 32]>,
+    ) -> Result<(ckyh::CreationChallengeResponse, PendingRegistration)> {
         crate::text(pseudonym)?;
         if user.is_nil() {
             return Err(Error::InvalidInput);
@@ -216,7 +227,8 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 return Err(Error::Transition);
             }
             let keys = self.passkeys.clone();
-            let (challenge, pending) = blocking(move || keys.start_registration(user)).await?;
+            let (challenge, pending) =
+                blocking(move || keys.start_initial_registration(user, seed)).await?;
             Ok((challenge, PendingRegistration { user, pending }))
         }
         .await

@@ -11,9 +11,9 @@ pub use pins::PinV2;
 mod storage;
 
 pub use membership::{
-    Config, ConfirmedSelfBan, Lobby, Login, Membership, PendingAdditionalRegistration,
-    PendingLogin, PendingRegistration, PendingSelfBanConfirmation, PendingSelfBanStatus,
-    RegisteredPasskey, SelfBanStatus, Warning,
+    Config, ConfirmedSelfBan, InitialCreationState, Lobby, Login, Membership,
+    PendingAdditionalRegistration, PendingLogin, PendingRegistration, PendingSelfBanConfirmation,
+    PendingSelfBanStatus, RegisteredPasskey, SelfBanStatus, Warning,
 };
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,
