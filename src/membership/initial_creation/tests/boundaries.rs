@@ -160,9 +160,12 @@ async fn the_actual_handle_reservation_deadline_bounds_every_creation_lease_chec
     let row = membership.enrol.view(USER, now()).await.unwrap();
     assert_eq!(row.state(), cnrl::State::HandleReserved);
     let deadline = row.expires_at().unwrap();
-    assert!(deadline > now() && deadline < now() + 300);
+    assert!(deadline > now());
+    // Original handle retention is measured in caller-configured days. Choose
+    // a host bound just beyond that actual deadline, without inventing policy.
+    let host_deadline = deadline.checked_add(1).unwrap();
     let mut original = membership
-        .initial_creation(&login.authentication, now() + 300)
+        .initial_creation(&login.authentication, host_deadline)
         .await
         .unwrap();
     assert_eq!(
