@@ -18,8 +18,10 @@ mod initial_creation;
 pub use initial_creation::InitialCreationState;
 mod clock;
 mod pin_change;
+mod roles;
 use clock::ObservedClock;
 pub use pin_change::PendingPinChange;
+pub use roles::RoleLease;
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
@@ -101,6 +103,7 @@ impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
 pub struct Membership<S, L, C = clbs::SystemClock> {
     instance: Arc<()>,
+    authority_scope: crlt::Community,
     storage: Arc<S>,
     passkeys: Arc<ckyh::Passkeys<ckyh::LibsqlStore>>,
     enrol: Arc<cnrl::Enrol<cnrl::LibsqlStorage>>,
@@ -118,6 +121,7 @@ impl<S, L, C> Clone for Membership<S, L, C> {
     fn clone(&self) -> Self {
         Self {
             instance: self.instance.clone(),
+            authority_scope: self.authority_scope.clone(),
             storage: self.storage.clone(),
             passkeys: self.passkeys.clone(),
             enrol: self.enrol.clone(),
@@ -161,6 +165,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::InvalidInput);
         }
         let community = storage.community();
+        let authority_scope = db.community(community)?;
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::InvalidInput)?;
         let passkeys = ckyh::Passkeys::new(
             ckyh::LibsqlStore::new(db, community, runtime)?,
@@ -188,6 +193,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         );
         Ok(Self {
             instance: Arc::new(()),
+            authority_scope,
             storage,
             passkeys: Arc::new(passkeys),
             enrol: Arc::new(enrol),

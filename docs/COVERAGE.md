@@ -71,3 +71,10 @@ continuation lines to 701–704 without changing PIN verification or their code.
 The private common test-module compiler port changed the supporting unit test
 file, while its genuine revocation/refusal tests retain their behavior. The
 exception inventory still contains exactly four lines and no branch arms.
+
+The original role and database-barrier port only moves the unchanged four legacy
+synchronous PIN continuation lines to 711–714. The exception remains bound to the
+current source bytes and the same locked `cgts` owner. The separate native PIN
+owner path has no exclusion; its genuine accepting proof/receipt journey remains
+a distinct qualification requirement. This legacy refusal is not evidence that
+the native owner is unavailable or successfully exercised.

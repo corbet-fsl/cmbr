@@ -134,7 +134,11 @@ pub async fn temporary() -> (tempfile::TempDir, crlt::Db) {
     .await;
     (dir, db)
 }
-pub async fn register(facade: &Facade, user: Uuid, subject: &str) -> SoftToken {
+pub async fn register<C: clbs::Clock + 'static>(
+    facade: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
+    user: Uuid,
+    subject: &str,
+) -> SoftToken {
     let mut device = SoftToken::new(true).unwrap().0;
     let (mut challenge, pending) = facade.begin_registration(user, subject).await.unwrap();
     challenge
@@ -160,7 +164,11 @@ pub async fn register(facade: &Facade, user: Uuid, subject: &str) -> SoftToken {
     );
     device
 }
-pub async fn login(facade: &Facade, device: &mut SoftToken, user: Uuid) -> cmbr::Login {
+pub async fn login<C: clbs::Clock + 'static>(
+    facade: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
+    device: &mut SoftToken,
+    user: Uuid,
+) -> cmbr::Login {
     // The software wallet retains IDs in its own fixture store, just as a real
     // wallet retains the registration response. This does not read server state.
     let cbor = serde_cbor_2::value::to_value(&*device).unwrap();
