@@ -2,6 +2,7 @@ use super::*;
 use crate::test_common as common;
 use crate::{Error, LibsqlStorage, MemoryStorage};
 use common::*;
+mod views;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_self_ban_proof_never_records_an_order_or_emits_a_revocation() {

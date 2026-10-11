@@ -6,6 +6,7 @@ use common::{
     *,
 };
 
+mod boundaries;
 mod post_commit;
 
 async fn register_original(m: &Facade, seed: Option<[u8; 32]>) -> Resident {

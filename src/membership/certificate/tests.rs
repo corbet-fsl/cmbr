@@ -2,6 +2,7 @@
 use super::*;
 use crate::test_common as common;
 use common::*;
+mod boundaries;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_certificate_keeps_the_original_member_and_exact_key() {
