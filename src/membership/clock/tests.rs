@@ -1,5 +1,7 @@
 //! Real UV and signed legal expiry across the shared observation boundary.
 use super::*;
+
+mod poison;
 use crate::test_common::{
     self as common,
     resident::{Resident, strip_prf},

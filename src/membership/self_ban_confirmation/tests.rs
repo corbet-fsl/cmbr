@@ -1,4 +1,6 @@
 use super::*;
+
+mod queue;
 use crate::test_common as common;
 use common::*;
 use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};

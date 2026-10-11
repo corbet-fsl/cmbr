@@ -118,3 +118,65 @@ async fn a_real_permanent_legal_commit_and_lifecycle_sync_poison_the_retained_cr
         Err(Error::Identity)
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_committed_self_ban_refuses_a_new_creation_read_before_sdk_access() {
+    let (_dir, db) = temporary().await;
+    let community = "creation-new-terminal-read";
+    let membership = facade(&db, community, Clock::new());
+    let mut device = register_original(&membership, Some([1; 32])).await;
+    let login = authenticate(&membership, &mut device).await;
+    membership
+        .self_ban(&login.authentication, &ban(community))
+        .await
+        .unwrap();
+    assert!(matches!(
+        membership
+            .initial_creation(&login.authentication, now() + 60)
+            .await,
+        Err(Error::Transition)
+    ));
+    let keys = membership.passkeys.clone();
+    let auth = login.authentication.clone();
+    let stored = tokio::task::spawn_blocking(move || keys.initial_creation(&auth))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.seed(), [1; 32]);
+    assert_eq!(stored.publication(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_actual_handle_reservation_deadline_bounds_every_creation_lease_check() {
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let membership = facade(&db, "creation-reservation-bound", clock.clone());
+    let mut device = register_original(&membership, Some([1; 32])).await;
+    let login = authenticate(&membership, &mut device).await;
+    membership
+        .reserve_handle(&login.authentication, HANDLE, &[])
+        .await
+        .unwrap();
+    let row = membership.enrol.view(USER, now()).await.unwrap();
+    assert_eq!(row.state(), cnrl::State::HandleReserved);
+    let deadline = row.expires_at().unwrap();
+    assert!(deadline > now() && deadline < now() + 300);
+    let mut original = membership
+        .initial_creation(&login.authentication, now() + 300)
+        .await
+        .unwrap();
+    assert_eq!(
+        membership
+            .check_initial_creation(&mut original)
+            .await
+            .unwrap(),
+        now()
+    );
+    assert!(!original.is_current(deadline));
+    clock.set(deadline);
+    assert_eq!(
+        membership.check_initial_creation(&mut original).await,
+        Err(Error::Identity)
+    );
+    assert!(!original.is_current(deadline));
+}
