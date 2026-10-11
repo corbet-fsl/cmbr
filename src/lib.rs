@@ -18,6 +18,7 @@ pub use membership::{
     Warning,
 };
 pub use storage::creation::CREATION_SCHEMA;
+pub use storage::role_redemptions::ROLE_REDEMPTION_SCHEMA;
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,
 };

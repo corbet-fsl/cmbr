@@ -215,3 +215,51 @@ async fn cancellation_inside_final_producer_read_rolls_back_the_real_staged_phas
         CommunityPhase::Uninitialized
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn independently_opened_same_file_writer_refuses_before_target_creation_staging() {
+    let fixture = Fixture::new().await;
+    let bytes = fixture.first_invitation();
+    let invitation = verified(&fixture, &bytes);
+    let mut config = crlt::Config::new(
+        format!(
+            "file://{}",
+            fixture._directory.path().join("creation.db").display()
+        ),
+        "",
+    );
+    config.max_connections = 2;
+    config.busy_timeout = Duration::from_millis(100);
+    let other = crlt::Db::open(config).await.unwrap();
+    other.migrate(&migrations()).await.unwrap();
+    // Lower database contention only: this scope is not GlobalRoot authority.
+    let writer = other.community("root").unwrap().tx().await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let mut producer = Waiting {
+        entered: entered.clone(),
+    };
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture.owner.initialize_community_creation_checked(
+                request(&fixture, &invitation),
+                &mut producer,
+            )
+        )
+        .await
+        .unwrap(),
+        Err(Error::Unavailable)
+    );
+    // The final producer callback never ran; the target could not obtain its
+    // original Immediate writer while the independent same-file owner held it.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), entered.notified())
+            .await
+            .is_err()
+    );
+    writer.rollback().await.unwrap();
+    assert_eq!(
+        fixture.owner.community_phase().await.unwrap(),
+        CommunityPhase::Uninitialized
+    );
+}

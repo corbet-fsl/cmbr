@@ -9,6 +9,7 @@ mod checked;
 mod cuts;
 mod first_root;
 mod fixture;
+mod founder;
 mod lapse;
 mod refusals;
 use fixture::*;

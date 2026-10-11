@@ -15,7 +15,7 @@ pub(super) struct Session {
 }
 
 impl Session {
-    fn new(auth: &Authentication) -> Self {
+    pub(super) fn new(auth: &Authentication) -> Self {
         Self {
             authentication: auth.clone(),
             until: common::now() as u64 + 3600,
@@ -64,6 +64,24 @@ pub(super) struct Fixture {
     pub session: Session,
 }
 
+pub(super) fn migrations() -> Vec<crlt::Migration<'static>> {
+    let mut schemas = crate::SCHEMAS.to_vec();
+    schemas.extend([
+        ("cmbr-device-keys", crate::DEVICE_KEYS_SCHEMA),
+        ("cgts", cgts::SCHEMA),
+        ("creation", crate::storage::creation::CREATION_SCHEMA),
+        ("rulebook", crbk::SCHEMA),
+        ("signing", cplc::csgn::SCHEMA),
+        ("policy", cplc::SCHEMA),
+        ("role-redemptions", crate::ROLE_REDEMPTION_SCHEMA),
+    ]);
+    schemas
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, ddl))| crlt::Migration::new(index as u32 + 1, name, ddl))
+        .collect()
+}
+
 impl Fixture {
     pub async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
@@ -74,21 +92,7 @@ impl Fixture {
         config.max_connections = 8;
         config.busy_timeout = std::time::Duration::from_millis(100);
         let db = crlt::Db::open(config).await.unwrap();
-        let mut schemas = crate::SCHEMAS.to_vec();
-        schemas.extend([
-            ("cmbr-device-keys", crate::DEVICE_KEYS_SCHEMA),
-            ("cgts", cgts::SCHEMA),
-            ("creation", crate::storage::creation::CREATION_SCHEMA),
-            ("rulebook", crbk::SCHEMA),
-            ("signing", cplc::csgn::SCHEMA),
-            ("policy", cplc::SCHEMA),
-        ]);
-        let migrations: Vec<_> = schemas
-            .iter()
-            .enumerate()
-            .map(|(index, (name, ddl))| crlt::Migration::new(index as u32 + 1, name, ddl))
-            .collect();
-        db.migrate(&migrations).await.unwrap();
+        db.migrate(&migrations()).await.unwrap();
         let clock = common::Clock::new();
         let owner = common::facade(&db, COMMUNITY, clock.clone());
         let mut token = common::register(&owner, common::USER, common::SUBJECT).await;
