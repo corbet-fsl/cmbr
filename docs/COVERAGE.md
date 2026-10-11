@@ -37,7 +37,7 @@ capability remains necessary before this workflow can complete.
 
 The four lines after the encoded spend verifier are unreachable in the current
 resolved owner graph. They are not an enabled PIN-change implementation. The
-[exact cgts verifier](https://git.corbet.ch/corbet-libs/cgts/src/commit/ed05954fac484abe7568cd32a9fdbda1ce4c7891/src/pins.rs)
+[exact cgts verifier](https://git.corbet.ch/corbet-libs/cgts/src/commit/0809bf4dcdd209357d56cefa51778e20513a2db4/src/pins.rs)
 validates the canonical binding and then unconditionally returns
 `ExtensionsUnavailable`; its `SpentChange` is sealed, non-deserializable and has
 no public constructor. Neither arbitrary wire bytes nor dependency feature
@@ -59,12 +59,15 @@ supporting source/owner revision, fails the gate and requires renewed review.
 Unrelated dependency updates still run the complete real test/coverage suite. No branch
 or whole function is excluded. The owner source SHA-256 is `3d45c3322a344db24b3dae20de2197cf1b2c4c6b6db7c86f90270c0e8f1cad87`.
 
-The renewed evidence was independently reviewed on 2026-10-10. This exception
+The existing exception requires renewed independent review after source or owner changes. This exception
 does not satisfy the blocked
 positive PIN-change workflow: when the owner releases a real spend capability,
 remove the exception and execute actual accepted-spend, replay and crash tests.
 
-The current dependency resolution rechecked this same owner file at `ed05954`: its
-SHA-256 above is unchanged. The authenticated passkey-listing addition moves the
-four continuation lines without changing PIN verification or their code. Source
-and lifecycle-test hashes were reviewed again; the exception inventory is unchanged.
+The initial-enrollment dependency resolution retains `cgts` at `0809bf4d`; its
+complete `src/pins.rs` is byte-identical to the previously reviewed `ed05954`
+source and has the SHA-256 above. Initial-enrollment methods moved the same four
+continuation lines to 701–704 without changing PIN verification or their code.
+The private common test-module compiler port changed the supporting unit test
+file, while its genuine revocation/refusal tests retain their behavior. The
+exception inventory still contains exactly four lines and no branch arms.
