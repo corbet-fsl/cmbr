@@ -709,7 +709,7 @@ dependencies = [
 [[package]]
 name = "cblc"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-libs/cblc?branch=main#d1c7588cd4c0027277936a2e15d60e8071da3feb"
+source = "git+https://git.corbet.ch/corbet-libs/cblc?branch=main#db2e41b6eab26dab39c7291d5840460e7bd21581"
 dependencies = [
  "cbcn",
  "cmbl",
@@ -1118,7 +1118,7 @@ dependencies = [
 [[package]]
 name = "cplc"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-libs/cplc?branch=main#bc5e86a189be3da9f65985a2d74a5b839746bc21"
+source = "git+https://git.corbet.ch/corbet-libs/cplc?branch=main#93af1b08505ce57cc52f9b114843cd243105ed26"
 dependencies = [
  "cbcn",
  "cblc",
@@ -1129,6 +1129,7 @@ dependencies = [
  "crlt",
  "csgn",
  "cshm",
+ "cvch",
  "data-encoding",
  "serde",
  "serde_json",
