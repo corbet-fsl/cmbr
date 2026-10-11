@@ -15,7 +15,7 @@ cargo metadata --locked --format-version 1 > dependency-metadata.json
 node .github/check-pins.mjs dependency-metadata.json
 cargo clippy --locked --all-targets -- -D warnings
 python3 -B .ci/passkey-controls.py
-cargo test --locked
+cargo test --locked --no-fail-fast
 
 python3 .github/check-first-party.py
 python3 .github/test-source-coverage.py
