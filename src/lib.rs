@@ -13,8 +13,8 @@ mod storage;
 pub use membership::{
     Config, ConfirmedSelfBan, InitialCreationState, Lobby, Login, Membership,
     PendingAdditionalRegistration, PendingLogin, PendingPinChange, PendingRegistration,
-    PendingSelfBanConfirmation, PendingSelfBanStatus, RegisteredPasskey, RoleLease, SelfBanStatus,
-    SourceLease, Warning,
+    PendingSelfBanConfirmation, PendingSelfBanStatus, RegisteredPasskey, RoleLease, RoleSession,
+    SelfBanStatus, SourceLease, Warning,
 };
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,

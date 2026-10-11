@@ -1,11 +1,15 @@
 //! Original role-assignment rights and UUID-ordered actor/target ownership.
 use super::*;
 
+mod current;
+use current::RoleWriter;
+
 struct Window {
     floor: u64,
     begun_at: u64,
     until: u64,
     started: Instant,
+    session: Option<Arc<dyn RoleSession>>,
 }
 
 impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
@@ -30,6 +34,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 begun_at: observed,
                 until: u64::MAX,
                 started,
+                session: None,
             },
         )
         .await
@@ -46,12 +51,44 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         checked_at: u64,
         valid_until: u64,
     ) -> Result<()> {
+        self.member_role_with_session(auth, member, role, checked_at, valid_until, None)
+            .await
+    }
+
+    /// The same original role change, retaining actual host session liveness
+    /// through queueing/cancellation and the final register transaction.
+    pub async fn set_member_role_checked(
+        &self,
+        auth: &Authentication,
+        member: &str,
+        role: crgs::Role,
+        checked_at: u64,
+        valid_until: u64,
+        session: Arc<dyn RoleSession>,
+    ) -> Result<()> {
+        self.member_role_with_session(auth, member, role, checked_at, valid_until, Some(session))
+            .await
+    }
+
+    async fn member_role_with_session(
+        &self,
+        auth: &Authentication,
+        member: &str,
+        role: crgs::Role,
+        checked_at: u64,
+        valid_until: u64,
+        session: Option<Arc<dyn RoleSession>>,
+    ) -> Result<()> {
+        let valid_until = valid_until.min(session.as_ref().map_or(u64::MAX, |s| s.valid_until()));
         crate::text(member)?;
         if checked_at >= valid_until || i64::try_from(valid_until).is_err() {
             return Err(Error::InvalidInput);
         }
         let started = Instant::now();
         let begun_at = self.role_time(checked_at, valid_until)?;
+        if let Some(session) = &session {
+            session.check(auth, begun_at)?;
+        }
         let mut observed = begun_at;
         self.identity(auth).await?;
         observed = self.role_time(observed, valid_until)?;
@@ -71,6 +108,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 begun_at,
                 until: valid_until,
                 started,
+                session,
             },
         )
         .await
@@ -102,8 +140,12 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 begun_at,
                 until,
                 started,
+                session,
             } = window;
             let mut observed = owner.role_time(floor, until)?;
+            if let Some(session) = &session {
+                session.check(&authentication, observed)?;
+            }
             let actor_row = owner
                 .authenticated(&authentication, observed as i64)
                 .await?;
@@ -145,19 +187,34 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             }
             // Once the original write is attempted, no failed tail establishes
             // that it did not commit. There is no role history or new role table.
+            let mut guard = RoleWriter::new(
+                &owner,
+                &authentication,
+                target,
+                actor_member.role,
+                Window {
+                    floor: observed,
+                    begun_at,
+                    until: deadline,
+                    started,
+                    session,
+                },
+            );
             owner
                 .register
-                .set_role(&target_row.member_id(), role)
+                .set_role_checked(&target_row.member_id(), role, &mut guard)
                 .await
                 .map_err(|_| Error::Unavailable)?;
             let completed = async {
                 observed = owner.role_time(observed, deadline)?;
+                guard.check_session(observed)?;
                 owner.identity(&authentication).await?;
                 observed = owner.role_time(observed, deadline)?;
                 owner.unrestricted(actor_row.subject()).await?;
                 observed = owner.role_time(observed, deadline)?;
                 owner.unrestricted(target_row.subject()).await?;
-                owner.role_time(observed, deadline)?;
+                observed = owner.role_time(observed, deadline)?;
+                guard.check_session(observed)?;
                 if started.elapsed() >= lifetime {
                     return Err(Error::Transition);
                 }

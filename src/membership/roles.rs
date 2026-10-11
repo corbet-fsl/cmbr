@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 mod action;
 mod assign;
 mod current;
+mod session;
+pub use session::RoleSession;
 
 #[cfg(test)]
 mod tests;

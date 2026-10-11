@@ -22,7 +22,7 @@ mod roles;
 mod source;
 use clock::ObservedClock;
 pub use pin_change::PendingPinChange;
-pub use roles::RoleLease;
+pub use roles::{RoleLease, RoleSession};
 pub use source::SourceLease;
 
 /// Resolved service configuration. No product policy defaults are supplied.
