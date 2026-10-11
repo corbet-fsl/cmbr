@@ -7,8 +7,8 @@ use crlt::{Community, Row, Transaction, params};
 /// this table grants no founder, role or community-creation authority.
 pub const ROLE_REDEMPTION_SCHEMA: &str = "CREATE TABLE cmbr_role_redemption (
     community_id TEXT NOT NULL,
-    receipt TEXT NOT NULL CHECK (length(receipt) = 64 AND receipt NOT GLOB '*[^0-9a-f]*'),
-    binding TEXT NOT NULL CHECK (length(binding) = 64 AND binding NOT GLOB '*[^0-9a-f]*'),
+    receipt TEXT NOT NULL CHECK (length(receipt) = 64 AND NOT (receipt GLOB '*[^0-9a-f]*')),
+    binding TEXT NOT NULL CHECK (length(binding) = 64 AND NOT (binding GLOB '*[^0-9a-f]*')),
     expires_at INTEGER NOT NULL CHECK (expires_at > 0),
     member TEXT NOT NULL CHECK (length(member) BETWEEN 1 AND 1024),
     lease_year INTEGER NOT NULL CHECK (lease_year BETWEEN 1 AND 9999),

@@ -13,9 +13,9 @@ pub const CREATION_SCHEMA: &str = "CREATE TABLE cmbr_creation (
     CHECK (
         (phase IN ('creating', 'active')
             AND typeof(receipt) = 'text' AND length(receipt) = 64
-            AND receipt NOT GLOB '*[^0-9a-f]*'
+            AND NOT (receipt GLOB '*[^0-9a-f]*')
             AND typeof(binding) = 'text' AND length(binding) = 64
-            AND binding NOT GLOB '*[^0-9a-f]*'
+            AND NOT (binding GLOB '*[^0-9a-f]*')
             AND typeof(expires_at) = 'integer' AND expires_at > 0
             AND ((phase = 'creating' AND first_root IS NULL)
                 OR (phase = 'active' AND typeof(first_root) = 'blob'
