@@ -18,7 +18,9 @@ mod initial_creation;
 pub use initial_creation::InitialCreationState;
 mod clock;
 mod creation;
-pub use creation::{AdmissionRequest, CommunityPhase};
+pub use creation::{
+    AdmissionRequest, CommunityPhase, CreationContext, CreationGuard, CreationRequest,
+};
 mod pin_change;
 mod roles;
 mod source;

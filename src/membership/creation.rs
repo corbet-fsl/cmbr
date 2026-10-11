@@ -2,8 +2,10 @@
 use super::*;
 use crate::storage::creation::{Creation, Pending, State as Phase};
 mod admission;
+mod checked;
 mod lapse;
 pub use admission::AdmissionRequest;
+pub use checked::{CreationContext, CreationGuard, CreationRequest};
 
 /// Coarse trusted-host view. A phase does not authorize admission or a role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

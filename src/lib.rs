@@ -11,10 +11,11 @@ pub use pins::PinV2;
 mod storage;
 
 pub use membership::{
-    AdmissionRequest, CommunityPhase, Config, ConfirmedSelfBan, InitialCreationState, Lobby, Login,
-    Membership, PendingAdditionalRegistration, PendingLogin, PendingPinChange, PendingRegistration,
-    PendingSelfBanConfirmation, PendingSelfBanStatus, RegisteredPasskey, RoleLease, RoleSession,
-    SelfBanStatus, SourceLease, Warning,
+    AdmissionRequest, CommunityPhase, Config, ConfirmedSelfBan, CreationContext, CreationGuard,
+    CreationRequest, InitialCreationState, Lobby, Login, Membership, PendingAdditionalRegistration,
+    PendingLogin, PendingPinChange, PendingRegistration, PendingSelfBanConfirmation,
+    PendingSelfBanStatus, RegisteredPasskey, RoleLease, RoleSession, SelfBanStatus, SourceLease,
+    Warning,
 };
 pub use storage::creation::CREATION_SCHEMA;
 pub use storage::{
