@@ -3,6 +3,7 @@ use super::*;
 use crate::test_common as common;
 use cnrl::Storage as _;
 
+mod action;
 mod activation;
 mod assignment;
 mod barrier;

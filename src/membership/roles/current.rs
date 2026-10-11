@@ -35,6 +35,26 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         lease: &mut RoleLease,
         operation: impl FnOnce(u64) -> Result<T>,
     ) -> Result<T> {
+        self.with_role_barrier(lease, None, operation).await
+    }
+
+    /// Apply the same writer-held role/key/legal barrier to an exact operation
+    /// selected by the trusted host. Membership restrictions still apply too.
+    pub async fn with_current_role_action<T>(
+        &self,
+        lease: &mut RoleLease,
+        action: &str,
+        operation: impl FnOnce(u64) -> Result<T>,
+    ) -> Result<T> {
+        self.with_role_barrier(lease, Some(action), operation).await
+    }
+
+    async fn with_role_barrier<T>(
+        &self,
+        lease: &mut RoleLease,
+        action: Option<&str>,
+        operation: impl FnOnce(u64) -> Result<T>,
+    ) -> Result<T> {
         if !Arc::ptr_eq(&self.instance, &lease.instance) || !lease.valid {
             return Err(Error::Identity);
         }
@@ -50,7 +70,10 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         // may activate while its database read is awaiting completion.
         let started = self.role_time(recheck.lease.checked_at, recheck.lease.valid_until)?;
         recheck.lease.valid = true;
-        let observed = self.check_role(recheck.lease).await?;
+        let observed = match action {
+            Some(action) => self.check_role_action(recheck.lease, action).await?,
+            None => self.check_role(recheck.lease).await?,
+        };
         if observed != started {
             return Err(Error::Transition);
         }
