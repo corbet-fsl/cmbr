@@ -17,7 +17,9 @@ pub use self_ban_status::{PendingSelfBanStatus, SelfBanStatus};
 mod initial_creation;
 pub use initial_creation::InitialCreationState;
 mod clock;
+mod pin_change;
 use clock::ObservedClock;
+pub use pin_change::PendingPinChange;
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {

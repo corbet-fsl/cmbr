@@ -257,3 +257,14 @@ Append `DEVICE_KEYS_SCHEMA` after the application's entire previous migration
 history. The six existing `SCHEMAS` entries, including the historical `cpky` name,
 are unchanged. Bindings persist only public keys and the already-held local
 credential/pseudonym relationship, never names or activity timestamps.
+
+Native pin changes retain a private `PendingPinChange` with the actual member
+queue, authenticated passkey, exact field/revision/fingerprint and exclusive
+session/policy deadline. The same accounting worker retains it while rechecking
+the historical native spend. Completion consumes only the matching sealed
+capability and rechecks actual key, lifecycle and legal owners under CPNS's
+immediate write transaction. These reads use the same database through another
+pooled connection; one connection refuses at the existing pool deadline.
+The application and Membership use the same shared observed clock. A changed
+time after legal observation refuses instead of reusing an earlier green view.
+Late commit replies require reconciliation, never another accounting spend.
