@@ -54,6 +54,13 @@ async fn fresh_original_uv_reads_only_committed_receipt_even_after_terminal_stat
         .unwrap();
     assert!(m.resume(&login.authentication).await.is_err());
     clock.set(now() - 1);
+    assert!(matches!(
+        m.begin_self_ban_status(now() + 60).await,
+        Err(Error::Unavailable)
+    ));
+    // A separate service instance still reads the immutable permanent record
+    // after restart; wall time cannot hide a committed self-ban.
+    let m = facade(&db, "status", clock.clone());
     let (challenge, pending) = m.begin_self_ban_status(now() + 60).await.unwrap();
     assert!(
         m.finish_self_ban_status(pending, response(&mut device, challenge).await)
@@ -129,6 +136,7 @@ async fn revoked_original_key_and_wall_or_monotonic_deadline_refuse_receipt_read
         Err(Error::Passkey)
     ));
     clock.set(now());
+    let m = facade(&db, "status-expiry", clock.clone());
     let (challenge, mut pending) = m.begin_self_ban_status(now() + 60).await.unwrap();
     pending.started = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
     assert!(matches!(
@@ -291,7 +299,7 @@ async fn observed_in_window_rollback_while_waiting_for_member_lease_refuses_afte
         result = tokio::time::timeout(Duration::from_secs(5), wait) => result.unwrap(),
     }
     drop(lease);
-    assert!(matches!(finish.await, Err(Error::Passkey)));
+    assert!(matches!(finish.await, Err(Error::Unavailable)));
     assert!(m.clock.0.lock().unwrap().is_empty());
 }
 

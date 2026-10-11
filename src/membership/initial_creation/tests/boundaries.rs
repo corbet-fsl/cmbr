@@ -27,9 +27,10 @@ async fn zero_bind_and_expired_or_negative_host_time_leave_the_real_winner_unset
         membership
             .initial_creation(&login.authentication, now() + 60)
             .await,
-        Err(Error::InvalidInput)
+        Err(Error::Unavailable)
     ));
     clock.set(now());
+    let membership = facade(&db, "creation-invalid-bounds", clock.clone());
     let mut original = membership
         .initial_creation(&login.authentication, now() + 60)
         .await

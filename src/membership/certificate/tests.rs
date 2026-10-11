@@ -49,10 +49,13 @@ async fn authenticated_certificate_keeps_the_original_member_and_exact_key() {
     clock.set(now() - 1);
     assert_eq!(
         member.check_certificate(&mut prepared).await,
-        Err(Error::Identity)
+        Err(Error::Unavailable)
     );
     drop(prepared);
     clock.set(now());
+    // A poisoned owner never recovers automatically; the next independent
+    // expiry scenario starts a fresh facade over the same genuine stored key.
+    let member = facade(&db, "certificate-owner", clock.clone());
     let mut prepared = member
         .passkey_certificate(&login.authentication)
         .await

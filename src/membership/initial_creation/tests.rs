@@ -220,10 +220,11 @@ async fn original_lease_floor_deadline_and_current_key_guard_immutable_retries()
     clock.set(now() + 4);
     assert_eq!(
         m.check_initial_creation(&mut state).await,
-        Err(Error::Identity)
+        Err(Error::Unavailable)
     );
     drop(state);
     clock.set(now());
+    let m = facade(&db, "creation-bounds", clock.clone());
     let mut state = m
         .initial_creation(&login.authentication, now() + 60)
         .await

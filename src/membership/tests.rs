@@ -627,6 +627,11 @@ async fn clock_and_storage_errors_leave_no_operation_lock() {
             .is_err()
     );
     clock.set(now());
+    assert!(matches!(
+        m.reserve_handle(&login.authentication, HANDLE, &[]).await,
+        Err(Error::Unavailable)
+    ));
+    let m = facade(&db, "a", clock.clone());
     m.reserve_handle(&login.authentication, HANDLE, &[])
         .await
         .unwrap();

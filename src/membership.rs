@@ -16,6 +16,8 @@ mod self_ban_status;
 pub use self_ban_status::{PendingSelfBanStatus, SelfBanStatus};
 mod initial_creation;
 pub use initial_creation::InitialCreationState;
+mod clock;
+use clock::ObservedClock;
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
@@ -85,10 +87,10 @@ pub enum Warning {
     AddSecondDeviceOrSyncedPasskey,
 }
 
-struct SharedClock<C>(Arc<C>);
+struct SharedClock<C>(Arc<ObservedClock<C>>);
 impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
     fn now(&self) -> clbs::Result<i64> {
-        self.0.now()
+        clbs::Clock::now(self.0.as_ref())
     }
 }
 
@@ -105,7 +107,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
     register_store: crgs::LibsqlStorage,
     pins: Arc<Pins<cpns::server::libsql::LibsqlStore, PinSpendVerifier>>,
     legal: Arc<clbs::Gate<crate::legal_storage::LegalStore<S>, L, SharedClock<C>>>,
-    clock: Arc<C>,
+    clock: Arc<ObservedClock<C>>,
     action: String,
     lease_months: u32,
 }
@@ -175,7 +177,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             cpns::server::libsql::LibsqlStore::new(db, community)?,
             PinSpendVerifier,
         );
-        let clock = Arc::new(clock);
+        let clock = Arc::new(ObservedClock::new(clock));
         let storage = Arc::new(storage);
         let legal = clbs::Gate::new(
             crate::legal_storage::LegalStore::new(db, storage.clone())?,
@@ -879,7 +881,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     }
 
     fn now(&self) -> Result<i64> {
-        let now = self.clock.now()?;
+        let now = clbs::Clock::now(self.clock.as_ref())?;
         date(now)?;
         Ok(now)
     }

@@ -206,6 +206,7 @@ async fn revoked_authority_and_wall_clock_or_monotonic_expiry_cannot_confirm() {
         Err(Error::InvalidInput)
     ));
     clock.set(now());
+    let m = facade(&db, "self-ban-expiry", clock.clone());
     let (challenge, mut state) = m
         .begin_self_ban_confirmation(&login.authentication, order("self-ban-expiry"), now() + 60)
         .await

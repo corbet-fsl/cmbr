@@ -6,6 +6,16 @@ cmty wires the facades. Leaves own their cryptography, lifecycle transitions and
 atomic writes. Services select trusted storage/verifiers and authenticate routes.
 No raw gate evidence, secrets, login times, request logs or history are retained.
 
+Membership and its legal gate share one private clock observation floor. Every
+valid interior sample is retained, including samples made while checking an
+expiring legal restriction. Negative or unsupported timestamps and backwards
+observations permanently refuse the current facade with `Unavailable`; later
+wall-clock correction does not clear that state. Clones share it. This state is
+RAM only and does not replace the caller's trusted clock or durable records.
+Sampling is serialized synchronously so thread scheduling cannot manufacture a
+backwards observation. Returned confirmation keeps its latest observed floor and
+the original exclusive deadline and `Instant` lifetime, without reanchoring.
+
 ## Admission and identity
 
 `admit` and `lapse` require cplc's policy owner, opaque `VerifiedSnapshot` and

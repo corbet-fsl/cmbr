@@ -89,10 +89,11 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         order: clbs::Order,
         expires_at: i64,
     ) -> Result<(ckyh::RequestChallengeResponse, PendingSelfBanConfirmation)> {
-        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let started = Instant::now();
         let now = self.now()?;
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         order.validate()?;
-        let row = self.authenticated(auth, now).await?;
+        let row = self.authenticated(auth, self.now()?).await?;
         if order.community != self.storage.community()
             || order.subject != row.subject()
             || order.entered_by != row.subject()
@@ -108,15 +109,18 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         {
             return Err(Error::InvalidInput);
         }
-        let started = Instant::now();
         let lifetime = Duration::from_secs((expires_at - now) as u64);
+        if !current(now, expires_at, started, lifetime, self.now()?) {
+            return Err(Error::InvalidInput);
+        }
         let keys = self.passkeys.clone();
         let user = auth.member();
         let credential = auth.credential_id().clone();
         let (challenge, pending) =
             blocking(move || keys.start_authentication_for(user, &credential)).await?;
         self.authenticated(auth, self.now()?).await?;
-        if !current(now, expires_at, started, lifetime, self.now()?) {
+        let observed = self.now()?;
+        if !current(now, expires_at, started, lifetime, observed) {
             return Err(Error::InvalidInput);
         }
         Ok((
@@ -124,7 +128,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             PendingSelfBanConfirmation {
                 order,
                 authorizer: auth.clone(),
-                not_before: now,
+                not_before: observed,
                 expires_at,
                 started,
                 lifetime,
@@ -158,7 +162,8 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 now,
             )
         };
-        if !check(self.now()?) {
+        let observed = self.now()?;
+        if !check(observed) {
             return Err(Error::InvalidInput);
         }
         self.authenticated(auth, self.now()?).await?;
@@ -175,13 +180,14 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         if row.subject() != state.order.subject {
             return Err(Error::Identity);
         }
-        if !check(self.now()?) {
+        let observed = self.now()?;
+        if !check(observed) {
             return Err(Error::InvalidInput);
         }
         Ok(ConfirmedSelfBan {
             order: state.order,
             authorizer: authentication,
-            not_before: state.not_before,
+            not_before: observed,
             expires_at: state.expires_at,
             started: state.started,
             lifetime: state.lifetime,
