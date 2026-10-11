@@ -268,3 +268,11 @@ pooled connection; one connection refuses at the existing pool deadline.
 The application and Membership use the same shared observed clock. A changed
 time after legal observation refuses instead of reusing an earlier green view.
 Late commit replies require reconciliation, never another accounting spend.
+
+Native account callers retain the opaque `SourceLease` returned by the original
+membership source. Its `check_source` method re-reads actual passkey, lifecycle,
+register, device and legal owners without cleanup writes or reacquiring the
+member lock. The caller must hold the same database's existing writer barrier;
+all reads must remain in the native commit's observed second and original lease
+lifetime. An error or cancellation invalidates the old lease. A pool without an
+available read connection refuses within its configured timeout.

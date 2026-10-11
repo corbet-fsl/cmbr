@@ -14,7 +14,7 @@ pub use membership::{
     Config, ConfirmedSelfBan, InitialCreationState, Lobby, Login, Membership,
     PendingAdditionalRegistration, PendingLogin, PendingPinChange, PendingRegistration,
     PendingSelfBanConfirmation, PendingSelfBanStatus, RegisteredPasskey, RoleLease, SelfBanStatus,
-    Warning,
+    SourceLease, Warning,
 };
 pub use storage::{
     DEVICE_KEYS_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage, Revocation, SCHEMA, Storage,

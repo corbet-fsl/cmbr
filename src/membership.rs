@@ -19,9 +19,11 @@ pub use initial_creation::InitialCreationState;
 mod clock;
 mod pin_change;
 mod roles;
+mod source;
 use clock::ObservedClock;
 pub use pin_change::PendingPinChange;
 pub use roles::RoleLease;
+pub use source::SourceLease;
 
 /// Resolved service configuration. No product policy defaults are supplied.
 pub struct Config {
@@ -1013,85 +1015,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         }
         self.storage.signal_revocation(row.subject()).await?;
         Ok(self.enrol.apply(&row, Event::AllPasskeysLost, now).await?)
-    }
-}
-
-impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
-    cplc::MembershipSource for Membership<S, L, C>
-{
-    type Lease = tokio::sync::OwnedMutexGuard<()>;
-    async fn membership(
-        &self,
-        member: &str,
-        now: u64,
-    ) -> cplc::Result<(cplc::MembershipFacts, Self::Lease)> {
-        let read: Result<_> = async {
-            let now_i64 = i64::try_from(now).map_err(|_| Error::InvalidInput)?;
-            if self.now()? != now_i64 {
-                return Err(Error::InvalidInput);
-            }
-            let row = self
-                .enrol_store
-                .load_subject(member)
-                .await?
-                .ok_or(Error::Transition)?;
-            let guard = crate::storage::member_lock(self.storage.community(), row.user()).await;
-            let row = self.enrol.view(row.user(), now_i64).await?;
-            self.unrestricted(row.subject()).await?;
-            if row.state() != State::Admitted
-                || !self
-                    .credentials(row.user())
-                    .await?
-                    .iter()
-                    .any(|key| !key.is_revoked())
-            {
-                return Err(Error::Transition);
-            }
-            if self.storage.revocation_pending(member).await? {
-                return Err(Error::Restricted);
-            }
-            self.storage.clear_passed_probation(member, now).await?;
-            let probation_until = self
-                .storage
-                .probation(member)
-                .await?
-                .ok_or(Error::Transition)?;
-            let registered = self
-                .register
-                .member(&row.member_id())
-                .await?
-                .ok_or(Error::Transition)?;
-            if registered.handle.is_none() {
-                return Err(Error::Transition);
-            }
-            let start = chrono::NaiveDate::from_ymd_opt(
-                registered.lease_end.year().into(),
-                registered.lease_end.month().into(),
-                1,
-            )
-            .ok_or(Error::InvalidInput)?;
-            let end = start
-                .checked_add_months(chrono::Months::new(1))
-                .ok_or(Error::InvalidInput)?;
-            let lease_end = end
-                .and_hms_opt(0, 0, 0)
-                .ok_or(Error::InvalidInput)?
-                .and_utc()
-                .timestamp();
-            Ok((
-                cplc::MembershipFacts {
-                    community: self.storage.community().into(),
-                    member: member.into(),
-                    state: row.state().membership(),
-                    probation_until,
-                    lease_end: lease_end as u64,
-                    authorized_devices: self.live_device_keys(&row).await?,
-                },
-                guard,
-            ))
-        }
-        .await;
-        read.map_err(|_| cplc::Error::Invalid("membership source unavailable"))
     }
 }
 

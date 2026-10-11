@@ -1,51 +1,13 @@
 [
   {
     "file": "src/membership.rs",
-    "line": 711,
+    "line": 713,
     "source": "Ok(self",
     "target": "native",
     "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
     "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
     "evidence_sources": {
-      "src/membership.rs": "05dc861ccf4745933da7dbe347a758f13ef4c7caec3d1e63f3c3d0b734e33a7d",
-      "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
-      "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
-    },
-    "evidence_packages": {
-      "cgts": {
-        "version": "0.0.0",
-        "source": "git+https://git.corbet.ch/corbet-libs/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
-      }
-    }
-  },
-  {
-    "file": "src/membership.rs",
-    "line": 712,
-    "source": ".pins",
-    "target": "native",
-    "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
-    "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
-    "evidence_sources": {
-      "src/membership.rs": "05dc861ccf4745933da7dbe347a758f13ef4c7caec3d1e63f3c3d0b734e33a7d",
-      "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
-      "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
-    },
-    "evidence_packages": {
-      "cgts": {
-        "version": "0.0.0",
-        "source": "git+https://git.corbet.ch/corbet-libs/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
-      }
-    }
-  },
-  {
-    "file": "src/membership.rs",
-    "line": 713,
-    "source": ".change(row.subject(), field, expected, replacement, &token)",
-    "target": "native",
-    "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
-    "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
-    "evidence_sources": {
-      "src/membership.rs": "05dc861ccf4745933da7dbe347a758f13ef4c7caec3d1e63f3c3d0b734e33a7d",
+      "src/membership.rs": "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6",
       "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
       "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
     },
@@ -59,12 +21,50 @@
   {
     "file": "src/membership.rs",
     "line": 714,
+    "source": ".pins",
+    "target": "native",
+    "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
+    "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
+    "evidence_sources": {
+      "src/membership.rs": "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6",
+      "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
+      "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+    },
+    "evidence_packages": {
+      "cgts": {
+        "version": "0.0.0",
+        "source": "git+https://git.corbet.ch/corbet-libs/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+      }
+    }
+  },
+  {
+    "file": "src/membership.rs",
+    "line": 715,
+    "source": ".change(row.subject(), field, expected, replacement, &token)",
+    "target": "native",
+    "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
+    "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
+    "evidence_sources": {
+      "src/membership.rs": "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6",
+      "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
+      "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+    },
+    "evidence_packages": {
+      "cgts": {
+        "version": "0.0.0",
+        "source": "git+https://git.corbet.ch/corbet-libs/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+      }
+    }
+  },
+  {
+    "file": "src/membership.rs",
+    "line": 716,
     "source": ".await?)",
     "target": "native",
     "reason": "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked.",
     "evidence": "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception",
     "evidence_sources": {
-      "src/membership.rs": "05dc861ccf4745933da7dbe347a758f13ef4c7caec3d1e63f3c3d0b734e33a7d",
+      "src/membership.rs": "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6",
       "src/membership/tests.rs": "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152",
       "tests/membership.rs": "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
     },
