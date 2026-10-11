@@ -22,7 +22,7 @@ async fn open(path: &std::path::Path) -> crlt::Db {
     let mut history: Vec<_> = crate::SCHEMAS
         .iter()
         .enumerate()
-        .map(|(index, (name, sql))| crlt::Migration::new(index as u32 + 1, *name, *sql))
+        .map(|(index, (name, sql))| crlt::Migration::new(index as u32 + 1, name, sql))
         .collect();
     history.push(crlt::Migration::new(
         history.len() as u32 + 1,

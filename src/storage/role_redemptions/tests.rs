@@ -19,7 +19,7 @@ async fn open_schema(path: &std::path::Path, schema: &str) -> crlt::Db {
     let mut history: Vec<_> = crate::SCHEMAS
         .iter()
         .enumerate()
-        .map(|(i, (name, sql))| crlt::Migration::new(i as u32 + 1, *name, *sql))
+        .map(|(i, (name, sql))| crlt::Migration::new(i as u32 + 1, name, sql))
         .collect();
     history.push(crlt::Migration::new(
         history.len() as u32 + 1,
