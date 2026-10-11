@@ -104,7 +104,7 @@ fn root_id() -> crgs::MemberId {
 
 fn invitation(id: &str) -> (Pending, cgts::Claim) {
     let now = common::now() as u64;
-    let signer = cplc::csgn::Signer::new(
+    let mut signer = cplc::csgn::Signer::new(
         "root",
         cplc::csgn::SecretKey::from_seed(&mut [7; 32]),
         now - 1,
