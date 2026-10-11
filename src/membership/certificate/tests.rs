@@ -114,7 +114,7 @@ async fn a_later_certificate_check_cannot_regress_to_a_time_after_initial_prepar
     clock.set(now() + 10);
     assert_eq!(
         member.check_certificate(&mut prepared).await,
-        Err(Error::Identity)
+        Err(Error::Unavailable)
     );
     clock.set(now() + 30);
     assert_eq!(

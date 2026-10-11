@@ -57,9 +57,13 @@ async fn register<C: clbs::Clock + 'static>(
         .await
         .unwrap();
     let (challenge, pending) = membership.begin_discoverable_login().await.unwrap();
-    let mut response = device
-        .ceremony(serde_json::to_value(challenge).unwrap(), false, ORIGIN)
-        .await;
+    // The resident fixture injects then strips PRF. This upstream optional
+    // field may be absent; an empty map preserves its exact challenge and UV.
+    let mut options = serde_json::to_value(challenge).unwrap();
+    if options["publicKey"]["extensions"].is_null() {
+        options["publicKey"]["extensions"] = serde_json::json!({});
+    }
+    let mut response = device.ceremony(options, false, ORIGIN).await;
     strip_prf(&mut response);
     membership
         .finish_login(pending, serde_json::from_value(response).unwrap())
@@ -172,9 +176,13 @@ async fn actual_successful_uv_then_in_window_rollback_withholds_confirmation_and
         .begin_self_ban_confirmation(&login.authentication, ban(community).order, now() + 60)
         .await
         .unwrap();
-    let mut response = device
-        .ceremony(serde_json::to_value(challenge).unwrap(), false, ORIGIN)
-        .await;
+    // The resident fixture injects then strips PRF. This upstream optional
+    // field may be absent; an empty map preserves its exact challenge and UV.
+    let mut options = serde_json::to_value(challenge).unwrap();
+    if options["publicKey"]["extensions"].is_null() {
+        options["publicKey"]["extensions"] = serde_json::json!({});
+    }
+    let mut response = device.ceremony(options, false, ORIGIN).await;
     strip_prf(&mut response);
     let before = membership
         .credentials(USER)
@@ -224,9 +232,13 @@ async fn confirmed_uv_retains_its_latest_floor_and_exclusive_original_deadline()
         .begin_self_ban_confirmation(&login.authentication, ban(community).order, now() + 60)
         .await
         .unwrap();
-    let mut response = device
-        .ceremony(serde_json::to_value(challenge).unwrap(), false, ORIGIN)
-        .await;
+    // The resident fixture injects then strips PRF. This upstream optional
+    // field may be absent; an empty map preserves its exact challenge and UV.
+    let mut options = serde_json::to_value(challenge).unwrap();
+    if options["publicKey"]["extensions"].is_null() {
+        options["publicKey"]["extensions"] = serde_json::json!({});
+    }
+    let mut response = device.ceremony(options, false, ORIGIN).await;
     strip_prf(&mut response);
     clock.set(now() + 20);
     let confirmed = membership
