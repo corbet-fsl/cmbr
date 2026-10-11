@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Require main declarations and unique locks with original issuer selectors."""
+import json
 import re
 import subprocess
 import sys
@@ -49,6 +50,38 @@ def check_manifest(value):
     elif isinstance(value, list):
         for item in value:
             check_manifest(item)
+
+
+def metadata_issuer_selectors(metadata):
+    """Validate original metadata owners with the same resolved-lock rule."""
+    selected = []
+    packages = metadata['packages']
+    names = {p['name'] for p in packages if p['name'] in ORIGINAL_ISSUERS}
+    names.update(d['name'] for p in packages for d in p['dependencies']
+                 if d.get('name') in ORIGINAL_ISSUERS)
+    for name in names:
+        entries = [p for p in packages if p['name'] == name]
+        if len(entries) != 1:
+            raise ValueError(f'Missing, invalid or duplicated Corbet dependency: {name}')
+        package = entries[0]
+        check_lock([package])
+        source = package['source']
+        original = source.startswith(f'git+{ORIGINAL_ISSUERS[name][1]}?branch=v01#')
+        declaration = source.split('#', 1)[0] if original else None
+        for owner in packages:
+            for dependency in owner['dependencies']:
+                if dependency.get('name') != name:
+                    continue
+                raw = dependency.get('source') or ''
+                if raw == declaration:
+                    continue
+                query = parse_qs(urlsplit(raw.removeprefix('git+')).query,
+                                 keep_blank_values=True)
+                if not FIRST_PARTY.match(raw) or query != {'branch': ['main']}:
+                    raise ValueError(f'Invalid first-party source selector for {name}')
+        selected.append({'name': name, 'resolved': source if original else None,
+                         'declaration': declaration})
+    return selected
 
 
 def rejects(function, value):
@@ -130,8 +163,11 @@ def self_test():
 
 
 if __name__ == '__main__':
-    self_test()
-    if '--self-test' not in sys.argv:
+    if '--metadata-issuers' in sys.argv:
+        print(json.dumps(metadata_issuer_selectors(json.load(sys.stdin))))
+    else:
+        self_test()
+    if '--self-test' not in sys.argv and '--metadata-issuers' not in sys.argv:
         paths = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
         for name in paths:
             path = Path(name)
