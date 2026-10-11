@@ -1,7 +1,6 @@
 //! Actual resident UV and original immutable first-key provenance.
 use super::*;
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use crate::test_common as common;
 use common::{
     resident::{Resident, strip_prf},
     *,

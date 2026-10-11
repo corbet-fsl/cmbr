@@ -1,7 +1,6 @@
 //! Original registered passkeys and member leases; no supplied descriptor.
 use super::*;
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use crate::test_common as common;
 use common::*;
 
 #[tokio::test(flavor = "multi_thread")]

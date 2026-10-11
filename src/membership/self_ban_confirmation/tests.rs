@@ -1,6 +1,5 @@
 use super::*;
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use crate::test_common as common;
 use common::*;
 use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
 
@@ -306,7 +305,7 @@ impl clbs::Clock for CrossingClock {
         use std::sync::atomic::Ordering;
         match self
             .remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                 value.checked_sub(1)
             }) {
             Ok(_) => Ok(now()),

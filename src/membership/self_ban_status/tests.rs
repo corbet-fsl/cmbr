@@ -1,6 +1,5 @@
 use super::*;
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use crate::test_common as common;
 use common::{
     resident::{Resident, strip_prf},
     *,
@@ -199,7 +198,7 @@ impl clbs::Clock for CrossingClock {
         Ok(
             if self
                 .0
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok()
             {
                 now()

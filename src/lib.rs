@@ -136,5 +136,9 @@ pub(crate) fn text(value: &str) -> Result<()> {
 extern crate self as cmbr;
 
 #[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_common;
+
+#[cfg(test)]
 #[path = "../tests/unit/boundaries.rs"]
 mod boundary_tests;

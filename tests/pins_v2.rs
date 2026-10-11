@@ -43,6 +43,7 @@ async fn stored_pin_opens_only_as_v2_in_its_authenticated_context() {
         .await
         .unwrap();
     let device = SigningKey::from_bytes(&[39; 32]);
+    let issuance_action = config().membership_action;
     let issued = now() as u64 / 86_400 * 86_400;
     let until = issued + 86_400;
     let mut signer = cplc::csgn::PersistentSigner::create(
@@ -91,6 +92,8 @@ async fn stored_pin_opens_only_as_v2_in_its_authenticated_context() {
         ),
     ] {
         let credential = cgrd::Credential {
+            purpose: cgrd::CredentialPurpose::CommunityCredentialV2,
+            issuance_action: issuance_action.clone(),
             community: "garden".into(),
             member: SUBJECT.into(),
             handle: HANDLE.into(),
@@ -122,6 +125,7 @@ async fn stored_pin_opens_only_as_v2_in_its_authenticated_context() {
             payload,
         };
         let policy = cgrd::Policy {
+            expected_issuance_action: &issuance_action,
             community: "garden",
             keys: signer.key_ring().unwrap(),
             now: now() as u64,

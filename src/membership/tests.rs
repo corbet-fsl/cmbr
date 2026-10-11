@@ -1,8 +1,7 @@
 use super::{DateTime, Error, State, Utc, Uuid, Warning, blocking, date};
-use cnrl::Storage as _;
-#[path = "../../tests/common/mod.rs"]
-mod common;
 use crate::Storage;
+use crate::test_common as common;
+use cnrl::Storage as _;
 use common::*;
 
 #[tokio::test(flavor = "multi_thread")]

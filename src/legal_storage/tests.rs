@@ -1,6 +1,5 @@
 use super::*;
-#[path = "../../tests/common/mod.rs"]
-mod common;
+use crate::test_common as common;
 use crate::{Error, LibsqlStorage, MemoryStorage};
 use common::*;
 
