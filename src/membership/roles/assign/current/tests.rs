@@ -1,6 +1,7 @@
 //! Real SDK and legal owner checks after the original role write is staged.
 use super::*;
 use crate::test_common as common;
+use crate::test_common::TestApi as _;
 use ed25519_dalek::{Signer as _, SigningKey};
 
 async fn root(owner: &common::Facade) -> Authentication {

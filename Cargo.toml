@@ -30,6 +30,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
 
 [dev-dependencies]
+csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", features = ["volatile-signer"] }
 passkey = "0.4"
 async-trait = "0.1"
 serde_cbor_2 = "0.13"

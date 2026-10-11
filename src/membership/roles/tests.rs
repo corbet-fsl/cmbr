@@ -1,7 +1,7 @@
 //! Genuine SDK, original register and durable legal authority scenarios.
 use super::*;
 use crate::test_common as common;
-use cnrl::Storage as _;
+use crate::test_common::TestApi as _;
 
 mod action;
 mod activation;

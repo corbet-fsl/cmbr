@@ -1,6 +1,7 @@
 //! Genuine SDK and legal reads under the original retained member lease.
 use super::*;
 use crate::test_common as common;
+use crate::test_common::TestApi as _;
 use cplc::MembershipSource as _;
 use ed25519_dalek::{Signer as _, SigningKey};
 use std::{

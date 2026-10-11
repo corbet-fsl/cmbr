@@ -1,5 +1,6 @@
 //! Target-owner and persistence boundaries, not GlobalRoot host authorization.
 use super::*;
+use std::time::Duration;
 
 struct Unsupported;
 impl CreationGuard for Unsupported {}

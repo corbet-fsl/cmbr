@@ -391,7 +391,7 @@ async fn explicit_legacy_adoption_keeps_actual_root_and_admitted_proof_without_r
                 membership: held.state().membership(),
             },
             &action,
-            &[],
+            &[] as &[crbk::GateResult],
             common::now(),
         )
         .unwrap();

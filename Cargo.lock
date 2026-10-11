@@ -990,6 +990,7 @@ dependencies = [
  "crbk",
  "crgs",
  "crlt",
+ "csgn",
  "cvch",
  "ed25519-dalek 2.2.0",
  "passkey",

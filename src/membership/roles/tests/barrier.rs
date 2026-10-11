@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_common::TestApi as _;
 use std::future::{Future, poll_fn};
 use std::task::Poll;
 
