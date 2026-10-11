@@ -156,18 +156,29 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             }
         })
         .await?;
-        timing.advance(self.now()?)?;
-        let mut result = InitialCreationState {
-            instance: self.instance.clone(),
-            authentication: auth.clone(),
-            subject: row.subject().to_owned(),
-            state,
-            timing,
-            valid: true,
-            _guard: guard,
-        };
-        self.check_initial_creation(&mut result).await?;
-        Ok(result)
+        let completion = async {
+            timing.advance(self.now()?)?;
+            let mut result = InitialCreationState {
+                instance: self.instance.clone(),
+                authentication: auth.clone(),
+                subject: row.subject().to_owned(),
+                state,
+                timing,
+                valid: true,
+                _guard: guard,
+            };
+            self.check_initial_creation(&mut result).await?;
+            Ok(result)
+        }
+        .await;
+        // A successful durable bind precedes every completion check above.
+        // Withholding an expired/revoked result must not suggest no winner was
+        // installed. Reconcile through actual current authority, never reset.
+        if bind.is_some() {
+            completion.map_err(|_| Error::Unavailable)
+        } else {
+            completion
+        }
     }
 
     /// Recheck original key/lifecycle/legal authority after host awaits. A

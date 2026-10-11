@@ -53,6 +53,13 @@ reenter session operations that acquire the same lease. Store transactions fence
 first registration and publication across pools; the RAM member queue alone
 does not establish cross-process first-key uniqueness.
 
+After a successful actual publication bind, any failed completion check returns
+`Unavailable`: the host must report reconciliation, since the durable winner may
+already exist. This includes expiry, rollback, revocation and legal/lifecycle
+changes before output. Known prewrite invalid-input and atomic conflict refusals
+retain their categories. Neither an uncertain reply nor a cancellation clears
+the winning metadata or authorizes another publication.
+
 ## No return and lobby
 
 The product rule is **NO RETURN**. Expired registration, loss of all passkeys,

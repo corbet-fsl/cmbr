@@ -6,6 +6,8 @@ use common::{
     *,
 };
 
+mod post_commit;
+
 async fn register_original(m: &Facade, seed: Option<[u8; 32]>) -> Resident {
     let mut device = Resident::default();
     let (challenge, pending) = match seed {
