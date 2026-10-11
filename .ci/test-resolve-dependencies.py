@@ -59,7 +59,7 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(retained, b"resolved fixture\n")
         self.assertIn(hashlib.sha256(retained).hexdigest(), result.stdout)
-        self.assertEqual(arguments, ['update', '-p', 'cblc', '-p', 'cpmt', '-p', 'cvfy', '-p', 'czkp', '-p', 'cgts', '-p', 'cplc', 'metadata', '--locked', '--format-version', '1'])
+        self.assertEqual(arguments, ['update', 'metadata', '--locked', '--format-version', '1'])
 
     def test_resolution_failure_never_replaces_retained_lock(self):
         result, retained, _ = self.run_resolution(status=7)
