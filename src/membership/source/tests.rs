@@ -232,14 +232,7 @@ async fn single_connection() -> (tempfile::TempDir, crlt::Db, common::Facade, Au
     config.timeout = Duration::from_millis(250);
     config.busy_timeout = Duration::from_millis(100);
     let db = crlt::Db::open(config).await.unwrap();
-    let mut schemas = crate::SCHEMAS.to_vec();
-    schemas.push(("cmbr-device-keys", crate::DEVICE_KEYS_SCHEMA));
-    let migrations: Vec<_> = schemas
-        .iter()
-        .enumerate()
-        .map(|(index, (name, sql))| crlt::Migration::new(index as u32 + 1, name, sql))
-        .collect();
-    db.migrate(&migrations).await.unwrap();
+    db.migrate(&common::migrations()).await.unwrap();
     let owner = common::facade(&db, "a", common::Clock::new());
     (directory, db, owner, auth)
 }

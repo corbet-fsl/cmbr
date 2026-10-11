@@ -5,7 +5,9 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
+mod creation;
 pub mod resident;
+pub use creation::{Session, admission_request, ensure_active};
 
 use ckyh::Uuid;
 use ed25519_dalek::{Signer, SigningKey};
@@ -115,15 +117,21 @@ pub async fn open(url: &str, token: &str) -> crlt::Db {
     let mut config = crlt::Config::new(url, token);
     config.max_connections = 4;
     let db = crlt::Db::open(config).await.unwrap();
-    let mut schemas = cmbr::SCHEMAS.to_vec();
-    schemas.push(("cmbr-device-keys", cmbr::DEVICE_KEYS_SCHEMA));
-    let migrations: Vec<_> = schemas
-        .iter()
-        .enumerate()
-        .map(|(i, (name, sql))| crlt::Migration::new(i as u32 + 1, name, sql))
-        .collect();
-    db.migrate(&migrations).await.unwrap();
+    db.migrate(&migrations()).await.unwrap();
     db
+}
+pub fn migrations() -> Vec<crlt::Migration<'static>> {
+    let mut schemas = cmbr::SCHEMAS.to_vec();
+    schemas.extend([
+        ("cmbr-device-keys", cmbr::DEVICE_KEYS_SCHEMA),
+        ("cgts", cgts::SCHEMA),
+        ("creation", cmbr::CREATION_SCHEMA),
+    ]);
+    schemas
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, ddl))| crlt::Migration::new(index as u32 + 1, name, ddl))
+        .collect()
 }
 pub async fn temporary() -> (tempfile::TempDir, crlt::Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -396,7 +404,7 @@ pub trait TestApi {
         gates: &[crbk::GateResult],
     ) -> cmbr::Result<cnrl::Record>;
 }
-impl TestApi for Facade {
+impl<C: clbs::Clock + 'static> TestApi for cmbr::Membership<cmbr::LibsqlStorage, Verify, C> {
     async fn admit_test(
         &self,
         auth: &ckyh::Authentication,
@@ -404,11 +412,22 @@ impl TestApi for Facade {
         gates: &[crbk::GateResult],
         lease: crgs::YearMonth,
     ) -> cmbr::Result<cnrl::Record> {
+        ensure_active(self).await?;
         let row = self.resume(auth).await?;
         let mut policy = verified_policy(raw, now()).await;
         let snapshot = policy.verified_settings(now() as u64).await.unwrap();
         let gates = checked(&snapshot, row.subject(), gates, now()).await;
-        self.admit(auth, &policy, &snapshot, &gates, lease).await
+        let session = Session::new(auth, snapshot.valid_until());
+        self.admit_current(admission_request(
+            auth,
+            &policy,
+            &snapshot,
+            &gates,
+            now() as u64,
+            lease,
+            &session,
+        ))
+        .await
     }
     async fn lobby_test(
         &self,
@@ -433,6 +452,16 @@ impl TestApi for Facade {
         let mut policy = verified_policy(raw, now()).await;
         let snapshot = policy.verified_settings(now() as u64).await.unwrap();
         let gates = checked(&snapshot, row.subject(), gates, now()).await;
-        self.lapse(auth, &policy, &snapshot, &gates).await
+        let session = Session::new(auth, snapshot.valid_until());
+        self.lapse_current(admission_request(
+            auth,
+            &policy,
+            &snapshot,
+            &gates,
+            now() as u64,
+            lease(),
+            &session,
+        ))
+        .await
     }
 }

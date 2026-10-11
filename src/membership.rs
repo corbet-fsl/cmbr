@@ -17,6 +17,8 @@ pub use self_ban_status::{PendingSelfBanStatus, SelfBanStatus};
 mod initial_creation;
 pub use initial_creation::InitialCreationState;
 mod clock;
+mod creation;
+pub use creation::{AdmissionRequest, CommunityPhase};
 mod pin_change;
 mod roles;
 mod source;
@@ -112,6 +114,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
     enrol_store: cnrl::LibsqlStorage,
     register: Arc<crgs::Register<crgs::LibsqlStorage>>,
     register_store: crgs::LibsqlStorage,
+    gate_claims: cgts::LibsqlStore,
     pins: Arc<Pins<cpns::server::libsql::LibsqlStore, PinSpendVerifier>>,
     legal: Arc<clbs::Gate<crate::legal_storage::LegalStore<S>, L, SharedClock<C>>>,
     clock: Arc<ObservedClock<C>>,
@@ -130,6 +133,7 @@ impl<S, L, C> Clone for Membership<S, L, C> {
             enrol_store: self.enrol_store.clone(),
             register: self.register.clone(),
             register_store: self.register_store.clone(),
+            gate_claims: self.gate_claims.clone(),
             pins: self.pins.clone(),
             legal: self.legal.clone(),
             clock: self.clock.clone(),
@@ -182,6 +186,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         );
         let register_store = crgs::LibsqlStorage::new(db.community(community)?);
         let register = crgs::Register::new(register_store.clone(), config.release_period);
+        let gate_claims = cgts::LibsqlStore::new(db, community).map_err(|_| Error::InvalidInput)?;
         let pins = Pins::new(
             cpns::server::libsql::LibsqlStore::new(db, community)?,
             PinSpendVerifier,
@@ -202,6 +207,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             enrol_store,
             register: Arc::new(register),
             register_store,
+            gate_claims,
             pins: Arc::new(pins),
             legal: Arc::new(legal),
             clock,
@@ -523,144 +529,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             decision,
             warnings,
         })
-    }
-
-    /// Admit or renew from cplc's fresh decision over verified capabilities only.
-    /// The bounded lease and coarse probation are owned by membership.
-    ///
-    /// ```compile_fail
-    /// fn raw(snapshot: crbk::Snapshot, results: Vec<crbk::GateResult>) {
-    ///     let _: &cplc::VerifiedSnapshot = &snapshot;
-    ///     let _: &cgts::CheckedGates = &results;
-    /// }
-    /// ```
-    pub async fn admit<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
-        &self,
-        auth: &Authentication,
-        policy: &cplc::Policy<R, P, K>,
-        snapshot: &cplc::VerifiedSnapshot,
-        gates: &cgts::CheckedGates,
-        lease: crgs::YearMonth,
-    ) -> Result<Record> {
-        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
-        let now = self.now()?;
-        let row = self.authenticated(auth, now).await?;
-        if snapshot.settings().community != self.storage.community() {
-            return Err(Error::Identity);
-        }
-        let decision = policy
-            .may(
-                snapshot,
-                crbk::Subject {
-                    id: row.subject(),
-                    membership: row.state().membership(),
-                },
-                &self.action,
-                gates,
-                now as u64,
-            )
-            .await
-            .map_err(|_| Error::Policy)?;
-        if !decision.allowed {
-            return Err(Error::Policy);
-        }
-        let current = date(now)?;
-        let last = current
-            .checked_add_months(chrono::Months::new(self.lease_months))
-            .ok_or(Error::InvalidInput)?;
-        if lease < crgs::YearMonth::new(current.year() as u16, current.month() as u8)?
-            || lease > crgs::YearMonth::new(last.year() as u16, last.month() as u8)?
-        {
-            return Err(Error::InvalidInput);
-        }
-        let durations = crbk::MembershipSettings::from_snapshot(snapshot.settings())
-            .map_err(|_| Error::Policy)?;
-        let probation_until = cplc::day(now as u64)
-            .checked_add(u64::from(durations.probation_days) * cplc::DAY)
-            .ok_or(Error::InvalidInput)?;
-        let m = self.clone();
-        let auth = auth.clone();
-        completing(async move {
-            let _guard = guard;
-            m.identity(&auth).await?;
-            m.unrestricted(row.subject()).await?;
-            let row = m
-                .enrol
-                .apply(&row, Event::PolicyEvaluated(&decision), now)
-                .await?;
-            let member = if m.register.member(&row.member_id()).await?.is_some() {
-                m.register
-                    .extend_lease(&row.member_id(), lease, date(now)?)
-                    .await?
-            } else {
-                m.register
-                    .admit(
-                        crgs::Admission {
-                            id: row.member_id(),
-                            handle: m.current_handle(&row).await?.ok_or(Error::Transition)?,
-                            role: crgs::Role::Member,
-                            lease_end: lease,
-                        },
-                        date(now)?,
-                    )
-                    .await?
-            };
-            if member.handle.is_none() {
-                return Err(Error::Transition);
-            }
-            // Policy is never reconstructed during recovery. A retry requires a
-            // fresh cplc decision; a register row alone cannot readmit a lapse.
-            m.unrestricted(row.subject()).await?;
-            let row = m
-                .enrol
-                .apply(
-                    &row,
-                    Event::AdmissionRecorded {
-                        member: &member,
-                        decision: &decision,
-                    },
-                    now,
-                )
-                .await?;
-            m.storage
-                .initialize_probation(row.subject(), probation_until)
-                .await?;
-            m.storage
-                .clear_passed_probation(row.subject(), now as u64)
-                .await?;
-            Ok(row)
-        })
-        .await
-    }
-
-    /// Explicit lapse; merely asking for the lobby never calls this transition.
-    pub async fn lapse<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
-        &self,
-        auth: &Authentication,
-        policy: &cplc::Policy<R, P, K>,
-        snapshot: &cplc::VerifiedSnapshot,
-        gates: &cgts::CheckedGates,
-    ) -> Result<Record> {
-        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
-        let lobby = self.lobby(auth, policy, snapshot, gates).await?;
-        if lobby.decision.allowed {
-            return Err(Error::Policy);
-        }
-        // Queue before the lifecycle commit: an ambiguous failure must never
-        // leave an already-issued credential without an invalidation event.
-        if lobby.enrolment.state() == State::Admitted {
-            self.storage
-                .signal_revocation(lobby.enrolment.subject())
-                .await?;
-        }
-        Ok(self
-            .enrol
-            .apply(
-                &lobby.enrolment,
-                Event::PolicyEvaluated(&lobby.decision),
-                self.now()?,
-            )
-            .await?)
     }
 
     /// Insert a device-created digest. The caller authorizes the schema field;

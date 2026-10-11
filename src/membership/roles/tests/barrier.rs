@@ -74,6 +74,25 @@ async fn single_connection_pool_refuses_role_release_and_poisons_the_observation
     let (directory, setup) = common::temporary().await;
     let setup_owner = common::facade(&setup, "a", common::Clock::new());
     let _ = first(&setup_owner).await;
+    // Genuine admission needs the ordinary pool before the intentionally
+    // exhausted owner is opened. This does not fabricate a Register row.
+    let mut device = common::register(&setup_owner, Uuid::from_u128(2), &"02".repeat(48)).await;
+    let auth = common::login(&setup_owner, &mut device, Uuid::from_u128(2))
+        .await
+        .authentication;
+    setup_owner
+        .reserve_handle(&auth, "second_member", &[])
+        .await
+        .unwrap();
+    setup_owner
+        .admit_test(
+            &auth,
+            &common::policy("a"),
+            &[common::test_gate("a", &"02".repeat(48))],
+            common::lease(),
+        )
+        .await
+        .unwrap();
     drop(setup_owner);
     drop(setup);
     let mut config = crlt::Config::new(
@@ -85,32 +104,8 @@ async fn single_connection_pool_refuses_role_release_and_poisons_the_observation
     config.busy_timeout = Duration::from_millis(100);
     let db = crlt::Db::open(config).await.unwrap();
     // Load the ORIGINAL schema ledger through the ordinary migration owner.
-    let mut schemas = crate::SCHEMAS.to_vec();
-    schemas.push(("cmbr-device-keys", crate::DEVICE_KEYS_SCHEMA));
-    let migrations: Vec<_> = schemas
-        .iter()
-        .enumerate()
-        .map(|(index, (name, sql))| crlt::Migration::new(index as u32 + 1, name, sql))
-        .collect();
-    db.migrate(&migrations).await.unwrap();
+    db.migrate(&common::migrations()).await.unwrap();
     let owner = common::facade(&db, "a", common::Clock::new());
-    let mut device = common::register(&owner, Uuid::from_u128(2), &"02".repeat(48)).await;
-    let auth = common::login(&owner, &mut device, Uuid::from_u128(2))
-        .await
-        .authentication;
-    owner
-        .reserve_handle(&auth, "second_member", &[])
-        .await
-        .unwrap();
-    owner
-        .admit_test(
-            &auth,
-            &common::policy("a"),
-            &[common::test_gate("a", &"02".repeat(48))],
-            common::lease(),
-        )
-        .await
-        .unwrap();
     let mut lease = owner.role(&auth).await.unwrap();
     let mut called = false;
     assert_eq!(

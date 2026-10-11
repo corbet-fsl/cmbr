@@ -1,4 +1,6 @@
 use crate::{Error, Result};
+pub(crate) mod creation;
+mod probation;
 use crlt::{Community, params};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -79,6 +81,18 @@ pub trait Storage: Send + Sync {
         member: &str,
         until: u64,
     ) -> impl Future<Output = Result<()>> + Send;
+    /// Join original initialize-once and passed-probation clearing to the exact
+    /// admission writer. Unsupported storage refuses rather than acknowledging
+    /// a membership whose required facts committed independently.
+    fn admit_probation_in_transaction(
+        &self,
+        _transaction: crlt::Transaction,
+        _member: &str,
+        _until: u64,
+        _now: u64,
+    ) -> impl Future<Output = Result<crlt::Transaction>> + Send {
+        std::future::ready(Err(Error::Unavailable))
+    }
     /// Delete a passed probation end while retaining the initialized member row.
     fn clear_passed_probation(
         &self,
@@ -381,6 +395,15 @@ impl Storage for LibsqlStorage {
         }
         tx.commit().await?;
         Ok(())
+    }
+    async fn admit_probation_in_transaction(
+        &self,
+        transaction: crlt::Transaction,
+        member: &str,
+        until: u64,
+        now: u64,
+    ) -> Result<crlt::Transaction> {
+        probation::admit(self, transaction, member, until, now).await
     }
     async fn clear_passed_probation(&self, member: &str, now: u64) -> Result<()> {
         crate::text(member)?;

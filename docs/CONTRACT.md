@@ -276,3 +276,22 @@ member lock. The caller must hold the same database's existing writer barrier;
 all reads must remain in the native commit's observed second and original lease
 lifetime. An error or cancellation invalidates the old lease. A pool without an
 available read connection refuses within its configured timeout.
+
+Community creation has an explicit separate `CREATION_SCHEMA`, appended after
+the application's existing migration history. An absent phase refuses admission.
+The trusted creation host initializes `Creating` only from the original verified
+recipient-bound BootstrapRoot entitlement; this creates no member or role.
+`admit_first_root` re-verifies its original COSE under the retained current target
+Policy, evaluates the full configured gates at their original checked time, and
+stages lifecycle, Root admission, receipt spend, probation and `Active` in one
+transaction. Ordinary `admit_current` requires an already active phase in that
+same writer. Unsupported atomic probation storage refuses.
+
+Both admission paths retain the original session and member guard, and require
+actual current passkey, legal and Policy reads in the writer's observed second.
+The original gate receipt deadlines are never renewed. A postcommit failed cut
+is uncertain (`Unavailable`); an exact first-Root retry reads the original effect
+without consuming again or extending its lease. Legacy adoption is an explicit
+trusted host operation that checks a genuinely admitted current Root through
+the original owners under the same writer. It records a distinct `LegacyActive`
+state without inventing a receipt, role or admission event.

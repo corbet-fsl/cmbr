@@ -188,6 +188,7 @@ async fn authenticated_policy_cannot_admit_with_invalid_membership_durations() {
     let (_dir, db) = temporary().await;
     let m = facade(&db, "policy-durations", Clock::new());
     let (_, login) = pending(&m, "policy-durations").await;
+    ensure_active(&m).await.unwrap();
     let mut raw = policy("policy-durations");
     raw.content.insert(crbk::PROBATION_DAYS.into(), 0.into());
     let mut policy = verified_policy(&raw, now()).await;
@@ -199,9 +200,18 @@ async fn authenticated_policy_cannot_admit_with_invalid_membership_durations() {
         now(),
     )
     .await;
+    let session = Session::new(&login.authentication, snapshot.valid_until());
     assert_eq!(
-        m.admit(&login.authentication, &policy, &snapshot, &gates, lease())
-            .await,
+        m.admit_current(admission_request(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &gates,
+            now() as u64,
+            lease(),
+            &session
+        ))
+        .await,
         Err(Error::Policy)
     );
     assert!(
@@ -547,9 +557,19 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
             .contains(&Warning::AddSecondDeviceOrSyncedPasskey)
     );
     let gates = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now()).await;
-    m.admit(&login.authentication, &policy, &snapshot, &gates, lease())
-        .await
-        .unwrap();
+    ensure_active(&m).await.unwrap();
+    let session = Session::new(&login.authentication, snapshot.valid_until());
+    m.admit_current(admission_request(
+        &login.authentication,
+        &policy,
+        &snapshot,
+        &gates,
+        now() as u64,
+        lease(),
+        &session,
+    ))
+    .await
+    .unwrap();
     let before = m.enrol_store.load(USER).await.unwrap().unwrap();
     let lobby = m
         .lobby(&login.authentication, &policy, &snapshot, &empty)
@@ -575,17 +595,21 @@ async fn stale_verified_inputs_and_unbounded_leases_cannot_admit() {
     let (_dir, db) = temporary().await;
     let m = facade(&db, "a", Clock::new());
     let (_, login) = pending(&m, "a").await;
+    ensure_active(&m).await.unwrap();
     let mut policy = verified_policy(&policy("a"), now()).await;
     let old = policy.verified_settings(now() as u64).await.unwrap();
     let gates = checked(&old, SUBJECT, &[test_gate("a", SUBJECT)], now()).await;
+    let session = Session::new(&login.authentication, old.valid_until());
     assert_eq!(
-        m.admit(
+        m.admit_current(admission_request(
             &login.authentication,
             &policy,
             &old,
             &gates,
-            crgs::YearMonth::new(9999, 12).unwrap()
-        )
+            now() as u64,
+            crgs::YearMonth::new(9999, 12).unwrap(),
+            &session,
+        ))
         .await,
         Err(Error::InvalidInput)
     );
@@ -598,14 +622,30 @@ async fn stale_verified_inputs_and_unbounded_leases_cannot_admit() {
         Err(Error::Policy)
     ));
     assert_eq!(
-        m.admit(&login.authentication, &policy, &old, &gates, lease())
-            .await,
+        m.admit_current(admission_request(
+            &login.authentication,
+            &policy,
+            &old,
+            &gates,
+            now() as u64,
+            lease(),
+            &session
+        ))
+        .await,
         Err(Error::Policy)
     );
     let current = policy.verified_settings(now() as u64).await.unwrap();
     assert_eq!(
-        m.admit(&login.authentication, &policy, &current, &gates, lease())
-            .await,
+        m.admit_current(admission_request(
+            &login.authentication,
+            &policy,
+            &current,
+            &gates,
+            now() as u64,
+            lease(),
+            &session
+        ))
+        .await,
         Err(Error::Policy)
     );
     assert_eq!(
@@ -635,20 +675,20 @@ async fn clock_and_storage_errors_leave_no_operation_lock() {
     m.reserve_handle(&login.authentication, HANDLE, &[])
         .await
         .unwrap();
-    // Delete only the test's probation table to fail after the actual register
-    // admission. The operation returns an error; sessions and retries stay live.
-    let mut migrations: Vec<_> = crate::SCHEMAS
-        .iter()
-        .enumerate()
-        .map(|(i, (name, sql))| crlt::Migration::new(i as u32 + 1, name, sql))
-        .collect();
+    // Delete only the test's probation table to fail after staging target
+    // Register admission; the whole target admission must roll back.
+    ensure_active(&m).await.unwrap();
+    let original = m.enrol.view(USER, now()).await.unwrap();
+    assert!(
+        m.register
+            .member(&original.member_id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut migrations = migrations();
     migrations.push(crlt::Migration::new(
-        7,
-        "cmbr-device-keys",
-        crate::DEVICE_KEYS_SCHEMA,
-    ));
-    migrations.push(crlt::Migration::new(
-        8,
+        migrations.len() as u32 + 1,
         "break-probation",
         "DROP TABLE cmbr_probation;",
     ));
@@ -663,8 +703,20 @@ async fn clock_and_storage_errors_leave_no_operation_lock() {
         .await,
         Err(Error::Unavailable)
     );
+    assert_eq!(m.enrol.view(USER, now()).await.unwrap(), original);
+    assert!(
+        m.register
+            .member(&original.member_id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        m.community_phase().await.unwrap(),
+        crate::CommunityPhase::Active
+    );
     assert!(m.resume(&login.authentication).await.is_ok());
-    migrations.push(crlt::Migration::new(9,"restore-probation","CREATE TABLE cmbr_probation (community_id TEXT NOT NULL, subject TEXT NOT NULL, probation_until INTEGER, PRIMARY KEY (community_id, subject)) WITHOUT ROWID;"));
+    migrations.push(crlt::Migration::new(migrations.len() as u32 + 1,"restore-probation","CREATE TABLE cmbr_probation (community_id TEXT NOT NULL, subject TEXT NOT NULL, probation_until INTEGER, PRIMARY KEY (community_id, subject)) WITHOUT ROWID;"));
     db.migrate(&migrations).await.unwrap();
     assert!(
         m.admit_test(
@@ -704,6 +756,7 @@ async fn explicit_lapse_queues_durable_revocation_before_readmission() {
     let (_dir, db) = temporary().await;
     let m = facade(&db, "lapse-event", Clock::new());
     let (_, login) = pending(&m, "lapse-event").await;
+    ensure_active(&m).await.unwrap();
     let mut policy = verified_policy(&policy("lapse-event"), now()).await;
     let snapshot = policy.verified_settings(now() as u64).await.unwrap();
     let green = checked(
@@ -713,13 +766,30 @@ async fn explicit_lapse_queues_durable_revocation_before_readmission() {
         now(),
     )
     .await;
-    m.admit(&login.authentication, &policy, &snapshot, &green, lease())
-        .await
-        .unwrap();
+    let session = Session::new(&login.authentication, snapshot.valid_until());
+    m.admit_current(admission_request(
+        &login.authentication,
+        &policy,
+        &snapshot,
+        &green,
+        now() as u64,
+        lease(),
+        &session,
+    ))
+    .await
+    .unwrap();
     assert!(m.revocations(10).await.unwrap().is_empty());
     let red = checked(&snapshot, SUBJECT, &[], now()).await;
     let row = m
-        .lapse(&login.authentication, &policy, &snapshot, &red)
+        .lapse_current(admission_request(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &red,
+            now() as u64,
+            lease(),
+            &session,
+        ))
         .await
         .unwrap();
     assert_eq!(row.state(), State::Lapsed);
@@ -727,9 +797,17 @@ async fn explicit_lapse_queues_durable_revocation_before_readmission() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].member, SUBJECT);
     assert!(m.storage.revocation_pending(SUBJECT).await.unwrap());
-    m.lapse(&login.authentication, &policy, &snapshot, &red)
-        .await
-        .unwrap();
+    m.lapse_current(admission_request(
+        &login.authentication,
+        &policy,
+        &snapshot,
+        &red,
+        now() as u64,
+        lease(),
+        &session,
+    ))
+    .await
+    .unwrap();
     assert_eq!(m.revocations(10).await.unwrap(), events);
 }
 
@@ -1026,14 +1104,17 @@ async fn fresh_policy_cannot_renew_a_lazily_released_handle() {
     let mut gate = test_gate("lazy-release", SUBJECT);
     gate.valid_until = later + 3600;
     let gates = checked(&snapshot, SUBJECT, &[gate], later).await;
+    let session = Session::new(&login.authentication, snapshot.valid_until());
     assert_eq!(
-        m.admit(
+        m.admit_current(admission_request(
             &login.authentication,
             &policy,
             &snapshot,
             &gates,
-            crgs::YearMonth::new(2031, 1).unwrap()
-        )
+            later as u64,
+            crgs::YearMonth::new(2031, 1).unwrap(),
+            &session,
+        ))
         .await,
         Err(Error::Transition)
     );

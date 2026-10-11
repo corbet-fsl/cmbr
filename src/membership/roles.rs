@@ -171,7 +171,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     }
 }
 
-fn lease_deadline(month: crgs::YearMonth) -> Result<u64> {
+pub(super) fn lease_deadline(month: crgs::YearMonth) -> Result<u64> {
     let start = chrono::NaiveDate::from_ymd_opt(month.year().into(), month.month().into(), 1)
         .ok_or(Error::InvalidInput)?;
     let end = start
