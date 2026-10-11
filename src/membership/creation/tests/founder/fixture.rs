@@ -79,7 +79,7 @@ impl Founder {
                 community: COMMUNITY,
                 member_binding: &binding,
                 purpose: cvch::role::Purpose::FounderAdmin,
-                issued_at: common::now() as u64,
+                issued_at: cplc::day(common::now() as u64),
                 valid_until: until,
             })
             .await

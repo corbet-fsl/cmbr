@@ -94,7 +94,7 @@ pub async fn ensure_active<C: clbs::Clock + 'static>(
         community: owner.community(),
         member_binding: &binding,
         purpose: cvch::role::Purpose::BootstrapRoot,
-        issued_at: now() as u64,
+        issued_at: cplc::day(now() as u64),
         valid_until: now() as u64 + 3600,
     };
     // The ACTUAL persistent target Policy issues the original recipient-bound

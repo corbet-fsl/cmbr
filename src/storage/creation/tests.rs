@@ -117,7 +117,7 @@ fn invitation(id: &str) -> (Pending, cgts::Claim) {
         community: COMMUNITY,
         member_binding: &binding,
         purpose: cvch::role::Purpose::BootstrapRoot,
-        issued_at: now,
+        issued_at: cplc::day(now),
         valid_until: now + 3600,
     };
     let cose = signer

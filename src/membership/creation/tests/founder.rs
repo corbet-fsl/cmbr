@@ -171,7 +171,7 @@ async fn signed_wrong_recipient_wrong_purpose_and_damaged_bytes_have_no_effect()
                 community: "other-community",
                 member_binding: &binding,
                 purpose: cvch::role::Purpose::FounderAdmin,
-                issued_at: common::now() as u64,
+                issued_at: cplc::day(common::now() as u64),
                 valid_until: common::now() as u64 + 600,
             })
             .await
@@ -191,7 +191,7 @@ async fn signed_wrong_recipient_wrong_purpose_and_damaged_bytes_have_no_effect()
         community: "other-community",
         member_binding: &binding,
         purpose: cvch::role::Purpose::FounderAdmin,
-        issued_at: common::now() as u64,
+        issued_at: cplc::day(common::now() as u64),
         valid_until: common::now() as u64 + 600,
     };
     let bytes = signer
