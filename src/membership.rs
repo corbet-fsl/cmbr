@@ -834,9 +834,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             self.storage.signal_revocation(row.subject()).await?;
             return Ok(self.enrol.apply(&row, Event::AllPasskeysLost, now).await?);
         }
-        if let clbs::State::Red(restrictions) =
-            self.legal.check(row.subject()).await?
-        {
+        if let clbs::State::Red(restrictions) = self.legal.check(row.subject()).await? {
             for restriction in restrictions {
                 let record = self
                     .legal

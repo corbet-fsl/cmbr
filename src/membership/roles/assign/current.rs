@@ -90,12 +90,7 @@ impl<'a, S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'st
         }
         for subject in [actor_row.subject(), target_row.subject()] {
             self.owner.unrestricted(subject).await?;
-            match self
-                .owner
-                .legal
-                .check(subject)
-                .await?
-            {
+            match self.owner.legal.check(subject).await? {
                 clbs::State::Green => {}
                 clbs::State::Red(_) => return Err(Error::Restricted),
             }

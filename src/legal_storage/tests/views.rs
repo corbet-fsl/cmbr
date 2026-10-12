@@ -35,13 +35,7 @@ async fn legal_views_preserve_exact_active_records_counts_and_community_isolatio
         owner.orders(SUBJECT).await.unwrap()[0].order(),
         &signed.order
     );
-    assert!(
-        owner
-            .orders("other-member")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(owner.orders("other-member").await.unwrap().is_empty());
     let foreign = LegalStore::new(
         &db,
         Arc::new(LibsqlStorage::new(&db, "other-community").unwrap()),

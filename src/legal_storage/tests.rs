@@ -68,9 +68,7 @@ async fn verified_append_and_outbox_survive_lost_response_and_canonical_retry_wi
     );
     assert!(storage.revocations(10).await.unwrap().is_empty());
     assert!(matches!(
-        gate.check(SUBJECT)
-            .await
-            .unwrap(),
+        gate.check(SUBJECT).await.unwrap(),
         clbs::State::Red(_)
     ));
 }
@@ -103,9 +101,7 @@ async fn notice_generation_failure_rolls_back_the_verified_order_without_erasing
         i64::MAX as u64
     );
     assert!(matches!(
-        gate.check(SUBJECT)
-            .await
-            .unwrap(),
+        gate.check(SUBJECT).await.unwrap(),
         clbs::State::Green
     ));
 }
