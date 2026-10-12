@@ -115,7 +115,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         current()?;
         self.unrestricted(row.subject()).await?;
         current()?;
-        match self.legal.check_action(row.subject(), action).await? {
+        match self.legal.check(row.subject()).await? {
             clbs::State::Green => {}
             clbs::State::Red(_) => return Err(Error::Restricted),
         }

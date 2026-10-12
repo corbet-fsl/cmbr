@@ -93,7 +93,7 @@ impl<'a, S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'st
             match self
                 .owner
                 .legal
-                .check_action(subject, "member_role_set")
+                .check(subject)
                 .await?
             {
                 clbs::State::Green => {}

@@ -39,14 +39,14 @@ impl<S: Storage + 'static> Store for LegalStore<S> {
     async fn self_ban_record(&self, subject: &str) -> Result<Option<Record>> {
         self.legal.self_ban_record(subject).await
     }
-    async fn active(&self, subject: &str, at: i64) -> Result<Vec<Record>> {
-        self.legal.active(subject, at).await
+    async fn orders(&self, subject: &str) -> Result<Vec<Record>> {
+        self.legal.orders(subject).await
     }
-    async fn revocations(&self, at: i64) -> Result<Vec<Revocation>> {
-        self.legal.revocations(at).await
+    async fn revocations(&self) -> Result<Vec<Revocation>> {
+        self.legal.revocations().await
     }
-    async fn counts(&self, at: i64) -> Result<Counts> {
-        self.legal.counts(at).await
+    async fn counts(&self) -> Result<Counts> {
+        self.legal.counts().await
     }
 }
 

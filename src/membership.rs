@@ -97,13 +97,6 @@ pub enum Warning {
     AddSecondDeviceOrSyncedPasskey,
 }
 
-struct SharedClock<C>(Arc<ObservedClock<C>>);
-impl<C: clbs::Clock> clbs::Clock for SharedClock<C> {
-    fn now(&self) -> clbs::Result<i64> {
-        clbs::Clock::now(self.0.as_ref())
-    }
-}
-
 /// Membership service for one community. All leaf capabilities stay private.
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
@@ -118,7 +111,7 @@ pub struct Membership<S, L, C = clbs::SystemClock> {
     register_store: crgs::LibsqlStorage,
     gate_claims: cgts::LibsqlStore,
     pins: Arc<Pins<cpns::server::libsql::LibsqlStore, PinSpendVerifier>>,
-    legal: Arc<clbs::Gate<crate::legal_storage::LegalStore<S>, L, SharedClock<C>>>,
+    legal: Arc<clbs::Gate<crate::legal_storage::LegalStore<S>, L>>,
     clock: Arc<ObservedClock<C>>,
     action: String,
     lease_months: u32,
@@ -198,7 +191,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let legal = clbs::Gate::new(
             crate::legal_storage::LegalStore::new(db, storage.clone())?,
             legal,
-            SharedClock(clock.clone()),
         );
         Ok(Self {
             instance: Arc::new(()),
@@ -802,7 +794,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(reservation.map(|reservation| reservation.handle))
     }
     async fn unrestricted(&self, subject: &str) -> Result<()> {
-        match self.legal.check_action(subject, &self.action).await? {
+        match self.legal.check(subject).await? {
             clbs::State::Green => Ok(()),
             clbs::State::Red(_) => Err(Error::Restricted),
         }
@@ -843,7 +835,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Ok(self.enrol.apply(&row, Event::AllPasskeysLost, now).await?);
         }
         if let clbs::State::Red(restrictions) =
-            self.legal.check_action(row.subject(), &self.action).await?
+            self.legal.check(row.subject()).await?
         {
             for restriction in restrictions {
                 let record = self

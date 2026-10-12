@@ -1021,38 +1021,6 @@ async fn live_owner_receipts_refuse_foreign_scopes_and_stale_register_rows() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn temporary_legal_restriction_lapses_without_terminating_the_member() {
-    use ed25519_dalek::Signer;
-    let (_dir, db) = temporary().await;
-    let m = facade(&db, "temporary-order", Clock::new());
-    let (_, login) = pending(&m, "temporary-order").await;
-    m.admit_test(
-        &login.authentication,
-        &policy("temporary-order"),
-        &[test_gate("temporary-order", SUBJECT)],
-        lease(),
-    )
-    .await
-    .unwrap();
-    let mut signed = ban("temporary-order");
-    signed.order.kind = clbs::OrderKind::Legal {
-        authority: "fixture-authority".into(),
-    };
-    signed.order.period.ends_at = Some(now() + 3600);
-    signed.proof = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
-        .sign(&signed.order.signing_payload().unwrap())
-        .to_bytes()
-        .to_vec();
-    m.legal.record_legal(&signed).await.unwrap();
-    assert_eq!(
-        m.enrolment_state(USER).await.unwrap().state(),
-        State::Lapsed
-    );
-    assert!(m.resume(&login.authentication).await.is_err());
-    assert_eq!(m.revocations(10).await.unwrap().len(), 1);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn raw_key_removal_cannot_leave_membership_issuance_authority() {
     use cplc::MembershipSource;
     let (_dir, db) = temporary().await;

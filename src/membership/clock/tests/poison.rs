@@ -41,8 +41,4 @@ async fn a_panicking_trusted_clock_poisons_the_same_membership_clone_and_legal_o
         clone.passkey_certificate(&login.authentication).await,
         Err(crate::Error::Unavailable)
     ));
-    assert!(matches!(
-        membership.legal.check_action(SUBJECT, "membership").await,
-        Err(clbs::Error::Clock)
-    ));
 }

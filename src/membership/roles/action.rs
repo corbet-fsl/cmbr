@@ -10,7 +10,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     pub async fn check_role_action(&self, lease: &mut RoleLease, action: &str) -> Result<u64> {
         let floor = self.check_role(lease).await?;
         lease.valid = false;
-        match self.legal.check_action(&lease.member, action).await? {
+        match self.legal.check(&lease.member).await? {
             clbs::State::Green => {}
             clbs::State::Red(_) => return Err(Error::Restricted),
         }

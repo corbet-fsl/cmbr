@@ -108,15 +108,6 @@ async fn foreign_subject_community_actor_kind_period_and_deadline_cannot_begin_c
     };
     invalid.push(value);
     let mut value = expected.clone();
-    value.period.starts_at = now() + 1;
-    invalid.push(value);
-    let mut value = expected.clone();
-    value.period.ends_at = Some(now() + 50);
-    invalid.push(value);
-    let mut value = expected.clone();
-    value.scope = clbs::Scope::Actions(["admission".into()].into());
-    invalid.push(value);
-    let mut value = expected.clone();
     value.reference.clear();
     invalid.push(value);
     for value in invalid {

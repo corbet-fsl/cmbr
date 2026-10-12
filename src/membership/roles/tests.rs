@@ -3,8 +3,6 @@ use super::*;
 use crate::test_common as common;
 use crate::test_common::TestApi as _;
 
-mod action;
-mod activation;
 mod assignment;
 mod barrier;
 mod lease;

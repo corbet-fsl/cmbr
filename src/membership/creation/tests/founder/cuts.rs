@@ -136,11 +136,6 @@ async fn genuine_legal_order_and_original_gate_timestamp_cannot_be_bypassed() {
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
-        scope: clbs::Scope::All,
-        period: clbs::Period {
-            starts_at: common::now(),
-            ends_at: None,
-        },
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())

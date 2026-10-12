@@ -265,11 +265,6 @@ async fn genuine_current_legal_order_prevents_root_and_preserves_creation() {
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
-        scope: clbs::Scope::All,
-        period: clbs::Period {
-            starts_at: common::now(),
-            ends_at: None,
-        },
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())

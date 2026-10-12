@@ -79,11 +79,6 @@ pub fn ban(community: &str) -> clbs::SignedOrder {
         reference: "synthetic-member-confirmation".into(),
         entered_by: SUBJECT.into(),
         kind: clbs::OrderKind::SelfBan,
-        scope: clbs::Scope::All,
-        period: clbs::Period {
-            starts_at: now(),
-            ends_at: None,
-        },
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())

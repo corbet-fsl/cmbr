@@ -100,11 +100,6 @@ async fn actual_legal_expiry_at_twenty_cannot_authorize_certificate_completion_b
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
-        scope: clbs::Scope::Actions([config().membership_action].into()),
-        period: clbs::Period {
-            starts_at: now(),
-            ends_at: Some(now() + 20),
-        },
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())
@@ -125,10 +120,6 @@ async fn actual_legal_expiry_at_twenty_cannot_authorize_certificate_completion_b
         membership.check_certificate(&mut prepared).await,
         Err(crate::Error::Identity)
     );
-    assert!(matches!(
-        membership.legal.check_action(SUBJECT, "membership").await,
-        Err(clbs::Error::Clock)
-    ));
 }
 
 struct CryptoClock {

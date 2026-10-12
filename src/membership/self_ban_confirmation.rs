@@ -101,7 +101,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Identity);
         }
         if order.kind != clbs::OrderKind::SelfBan
-            || order.period.starts_at > now
             || expires_at <= now
             || expires_at
                 .checked_sub(now)

@@ -45,11 +45,6 @@ fn restriction(id: &str, starts_at: i64) -> clbs::SignedOrder {
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
-        scope: clbs::Scope::Actions([ACCOUNT.to_owned()].into()),
-        period: clbs::Period {
-            starts_at,
-            ends_at: None,
-        },
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())
@@ -148,73 +143,7 @@ async fn independent_legal_writer_restricts_account_without_restricting_membersh
     ));
     assert!(!lease.valid);
     assert!(matches!(
-        owner.legal.check_action(common::SUBJECT, ACCOUNT).await,
-        Ok(clbs::State::Red(_))
-    ));
-}
-
-#[derive(Clone)]
-struct MeasuredClock {
-    time: Arc<AtomicI64>,
-    calls: Arc<AtomicUsize>,
-    advance_at: Arc<AtomicUsize>,
-}
-impl clbs::Clock for MeasuredClock {
-    fn now(&self) -> clbs::Result<i64> {
-        let count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if count >= self.advance_at.load(Ordering::SeqCst) {
-            self.time.store(common::now() + 1, Ordering::SeqCst);
-        }
-        Ok(self.time.load(Ordering::SeqCst))
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scheduled_account_restriction_crossing_the_final_read_withholds_facts() {
-    let (_directory, db) = common::temporary().await;
-    let clock = MeasuredClock {
-        time: Arc::new(AtomicI64::new(common::now())),
-        calls: Arc::new(AtomicUsize::new(0)),
-        advance_at: Arc::new(AtomicUsize::new(usize::MAX)),
-    };
-    let owner = Membership::new(
-        &db,
-        crate::LibsqlStorage::new(&db, "a").unwrap(),
-        common::config(),
-        common::Verify,
-        clock.clone(),
-    )
-    .unwrap();
-    let auth = admitted(&owner).await;
-    let (_, mut lease) = owner
-        .membership(common::SUBJECT, common::now() as u64)
-        .await
-        .unwrap();
-    owner
-        .legal
-        .record_legal(&restriction("scheduled-account", common::now() + 1))
-        .await
-        .unwrap();
-    // Calibrate the SAME successful owner read with the real stored order.
-    // Advance at its final sample, after the earlier legal read was Green.
-    clock.calls.store(0, Ordering::SeqCst);
-    owner
-        .check_source(&mut lease, &auth, ACCOUNT, common::now() as u64)
-        .await
-        .unwrap();
-    let final_read = clock.calls.load(Ordering::SeqCst);
-    assert!(final_read > 1);
-    clock.calls.store(0, Ordering::SeqCst);
-    clock.advance_at.store(final_read, Ordering::SeqCst);
-    assert!(matches!(
-        owner
-            .check_source(&mut lease, &auth, ACCOUNT, common::now() as u64)
-            .await,
-        Err(Error::Transition | Error::Restricted)
-    ));
-    assert!(!lease.valid);
-    assert!(matches!(
-        owner.legal.check_action(common::SUBJECT, ACCOUNT).await,
+        owner.legal.check(common::SUBJECT).await,
         Ok(clbs::State::Red(_))
     ));
 }
