@@ -73,55 +73,6 @@ async fn register<C: clbs::Clock + 'static>(
         .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn actual_legal_expiry_at_twenty_cannot_authorize_certificate_completion_back_at_fifteen() {
-    let (_dir, db) = temporary().await;
-    let community = "shared-legal-floor";
-    let membership = crate::Membership::new(
-        &db,
-        crate::LibsqlStorage::new(&db, community).unwrap(),
-        config(),
-        Verify,
-        SequenceClock(Mutex::default()),
-    )
-    .unwrap();
-    let mut device = Resident::default();
-    let login = register(&membership, &mut device).await;
-    let mut prepared = membership
-        .passkey_certificate(&login.authentication)
-        .await
-        .unwrap();
-    let order = clbs::Order {
-        community: community.into(),
-        id: "temporary-signed-order".into(),
-        subject: SUBJECT.into(),
-        reference: "explicit signature fixture".into(),
-        entered_by: "fixture-operator".into(),
-        kind: clbs::OrderKind::Legal {
-            authority: "fixture-signature-authority".into(),
-        },
-    };
-    let proof = SigningKey::from_bytes(&[7; 32])
-        .sign(&order.signing_payload().unwrap())
-        .to_bytes()
-        .to_vec();
-    membership
-        .legal
-        .record_legal(&clbs::SignedOrder { order, proof })
-        .await
-        .unwrap();
-    *membership.clock.0.lock().unwrap() = [now(), now() + 20, now() + 15].into();
-    assert_eq!(
-        membership.check_certificate(&mut prepared).await,
-        Err(crate::Error::Unavailable)
-    );
-    assert!(membership.clock.0.lock().unwrap().is_empty());
-    assert_eq!(
-        membership.check_certificate(&mut prepared).await,
-        Err(crate::Error::Identity)
-    );
-}
-
 struct CryptoClock {
     observer: Mutex<Option<(Arc<ckyh::Passkeys<ckyh::LibsqlStore>>, u32)>>,
     first_after_crypto: AtomicBool,

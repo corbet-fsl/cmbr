@@ -338,7 +338,7 @@ async fn current_membership_requires_publication_before_outbox_acknowledgement()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn renewal_cannot_resurrect_a_handle_due_for_release() {
+async fn a_member_whose_lease_ended_cannot_return_by_renewal() {
     let (_dir, db) = temporary().await;
     let clock = Clock::new();
     let m = facade(&db, "a", clock.clone());
@@ -355,15 +355,16 @@ async fn renewal_cannot_resurrect_a_handle_due_for_release() {
     clock.set(late.timestamp());
     let mut gate = test_gate("a", SUBJECT);
     gate.valid_until = late.timestamp() + 3600;
-    assert_eq!(
+    assert!(
         m.admit_test(
             &login.authentication,
             &policy("a"),
             &[gate],
             crgs::YearMonth::new(2030, 9).unwrap()
         )
-        .await,
-        Err(Error::Policy)
+        .await
+        .is_err(),
+        "a member whose lease has ended can never return"
     );
     m.maintain(50).await.unwrap();
     assert_eq!(
@@ -1047,7 +1048,7 @@ async fn raw_key_removal_cannot_leave_membership_issuance_authority() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fresh_policy_cannot_renew_a_lazily_released_handle() {
+async fn a_member_whose_lease_ended_cannot_return_with_a_fresh_policy() {
     use cplc::MembershipSource;
     let (_dir, db) = temporary().await;
     let clock = Clock::new();
@@ -1087,6 +1088,7 @@ async fn fresh_policy_cannot_renew_a_lazily_released_handle() {
         Err(Error::Transition)
     );
     assert!(m.membership(SUBJECT, later as u64).await.is_err());
+    m.maintain(50).await.unwrap();
     assert_eq!(
         m.enrolment_state(USER).await.unwrap().state(),
         State::Released

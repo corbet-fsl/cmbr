@@ -107,7 +107,7 @@ fn invitation(id: &str) -> (Pending, cgts::Claim) {
     let mut signer = cplc::csgn::Signer::new(
         "root",
         cplc::csgn::SecretKey::from_seed(&mut [7; 32]),
-        now - 1,
+        cplc::day(now),
         now + 7200,
     )
     .unwrap();
