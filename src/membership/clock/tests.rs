@@ -1,4 +1,4 @@
-//! Real UV and signed legal expiry across the shared observation boundary.
+//! Real UV across the shared observation boundary.
 use super::*;
 
 mod poison;
@@ -7,11 +7,7 @@ use crate::test_common::{
     resident::{Resident, strip_prf},
     *,
 };
-use ed25519_dalek::{Signer as _, SigningKey};
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn invalid_times_and_rollback_poison_the_same_shared_clock_without_replacing_its_floor() {
@@ -36,13 +32,6 @@ fn invalid_times_and_rollback_poison_the_same_shared_clock_without_replacing_its
     assert_eq!(clock.now(), Err(clbs::Error::Clock));
     source.set(21);
     assert_eq!(clock.clone().now(), Err(clbs::Error::Clock));
-}
-
-struct SequenceClock(Mutex<VecDeque<i64>>);
-impl clbs::Clock for SequenceClock {
-    fn now(&self) -> clbs::Result<i64> {
-        Ok(self.0.lock().unwrap().pop_front().unwrap_or_else(now))
-    }
 }
 
 async fn register<C: clbs::Clock + 'static>(
