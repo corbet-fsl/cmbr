@@ -35,7 +35,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         &self,
         lease: &mut SourceLease,
         auth: &Authentication,
-        action: &str,
+        _action: &str,
         observed: u64,
     ) -> Result<cplc::MembershipFacts> {
         if !lease.valid

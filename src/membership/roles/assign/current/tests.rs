@@ -2,7 +2,6 @@
 use super::*;
 use crate::test_common as common;
 use crate::test_common::TestApi as _;
-use ed25519_dalek::{Signer as _, SigningKey};
 
 async fn root(owner: &common::Facade) -> Authentication {
     let mut device = common::register(owner, common::USER, common::SUBJECT).await;

@@ -1,13 +1,14 @@
-//! Trusted operation-specific legal restrictions on the same original role lease.
+//! Permanent legal restrictions rechecked on the same original role lease.
 use super::*;
 
 impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static>
     Membership<S, L, C>
 {
-    /// Recheck THIS retained role and an operation selected by the trusted host.
+    /// Recheck THIS retained role for an operation selected by the trusted host.
+    /// Blocks are permanent and total, so the operation does not narrow the check.
     /// This does not acquire another member guard or writer. The action is never
     /// a member assertion; current legal state is read through the original Gate.
-    pub async fn check_role_action(&self, lease: &mut RoleLease, action: &str) -> Result<u64> {
+    pub async fn check_role_action(&self, lease: &mut RoleLease, _action: &str) -> Result<u64> {
         let floor = self.check_role(lease).await?;
         lease.valid = false;
         match self.legal.check(&lease.member).await? {

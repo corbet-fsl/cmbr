@@ -26,11 +26,7 @@ async fn verified_append_and_outbox_survive_lost_response_and_canonical_retry_wi
  {
     let (directory, db) = temporary().await;
     let storage = Arc::new(LibsqlStorage::new(&db, "atomic-ban").unwrap());
-    let gate = clbs::Gate::new(
-        LegalStore::new(&db, storage.clone()).unwrap(),
-        Verify,
-        Clock::new(),
-    );
+    let gate = clbs::Gate::new(LegalStore::new(&db, storage.clone()).unwrap(), Verify);
     // The caller loses the result before advancing membership or publishing.
     // The durable record and matching outbox must be sufficient after reopening.
     gate.self_ban(&ban("atomic-ban")).await.unwrap();
@@ -44,11 +40,7 @@ async fn verified_append_and_outbox_survive_lost_response_and_canonical_retry_wi
     )
     .await;
     let storage = Arc::new(LibsqlStorage::new(&db, "atomic-ban").unwrap());
-    let gate = clbs::Gate::new(
-        LegalStore::new(&db, storage.clone()).unwrap(),
-        Verify,
-        Clock::new(),
-    );
+    let gate = clbs::Gate::new(LegalStore::new(&db, storage.clone()).unwrap(), Verify);
     let record = gate.record("confirmed-self-ban").await.unwrap().unwrap();
     assert_eq!(record.order(), &ban("atomic-ban").order);
     let after = storage.revocations(10).await.unwrap().remove(0);
@@ -86,11 +78,7 @@ async fn notice_generation_failure_rolls_back_the_verified_order_without_erasing
         )
         .await
         .unwrap();
-    let gate = clbs::Gate::new(
-        LegalStore::new(&db, storage.clone()).unwrap(),
-        Verify,
-        Clock::new(),
-    );
+    let gate = clbs::Gate::new(LegalStore::new(&db, storage.clone()).unwrap(), Verify);
     assert_eq!(
         gate.self_ban(&ban("notice-overflow")).await,
         Err(clbs::Error::Storage)
@@ -110,11 +98,7 @@ async fn notice_generation_failure_rolls_back_the_verified_order_without_erasing
 async fn a_caller_store_without_transaction_support_refuses_atomic_legal_mutation() {
     let (_directory, db) = temporary().await;
     let storage = Arc::new(MemoryStorage::new("no-atomic-port").unwrap());
-    let gate = clbs::Gate::new(
-        LegalStore::new(&db, storage.clone()).unwrap(),
-        Verify,
-        Clock::new(),
-    );
+    let gate = clbs::Gate::new(LegalStore::new(&db, storage.clone()).unwrap(), Verify);
     assert_eq!(
         gate.self_ban(&ban("no-atomic-port")).await,
         Err(clbs::Error::Storage)
@@ -167,11 +151,7 @@ async fn a_caller_storage_from_another_database_cannot_hide_the_atomic_notice() 
     let (_first_directory, first) = temporary().await;
     let (_second_directory, second) = temporary().await;
     let storage = Arc::new(LibsqlStorage::new(&second, "mismatched-db").unwrap());
-    let gate = clbs::Gate::new(
-        LegalStore::new(&first, storage.clone()).unwrap(),
-        Verify,
-        Clock::new(),
-    );
+    let gate = clbs::Gate::new(LegalStore::new(&first, storage.clone()).unwrap(), Verify);
     assert_eq!(
         gate.self_ban(&ban("mismatched-db")).await,
         Err(clbs::Error::Storage)

@@ -16,8 +16,6 @@ async fn legal_views_preserve_exact_active_records_counts_and_community_isolatio
         gate.counts().await.unwrap(),
         Counts {
             legal_orders: 0,
-            self_bans: 1,
-            legal_orders: 0,
             self_bans: 1
         }
     );

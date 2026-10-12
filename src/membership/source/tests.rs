@@ -6,7 +6,6 @@ use cplc::MembershipSource as _;
 use ed25519_dalek::{Signer as _, SigningKey};
 use std::{
     future::{Future, poll_fn},
-    sync::atomic::{AtomicI64, AtomicUsize, Ordering},
     task::Poll,
 };
 
