@@ -34,7 +34,7 @@ async fn admitted<C: clbs::Clock + 'static>(
     auth
 }
 
-fn restriction(id: &str, starts_at: i64) -> clbs::SignedOrder {
+fn restriction(id: &str) -> clbs::SignedOrder {
     let order = clbs::Order {
         community: "a".into(),
         id: id.into(),
@@ -110,7 +110,7 @@ async fn independent_sdk_revocation_invalidates_the_exact_retained_source() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn independent_legal_writer_restricts_account_without_restricting_membership() {
+async fn independent_legal_writer_blocks_the_member_for_every_action() {
     let (_directory, db) = common::temporary().await;
     let clock = common::Clock::new();
     let owner = common::facade(&db, "a", clock.clone());
@@ -122,21 +122,18 @@ async fn independent_legal_writer_restricts_account_without_restricting_membersh
     let independent = common::facade(&db, "a", clock);
     independent
         .legal
-        .record_legal(&restriction("account-only", common::now()))
+        .record_legal(&restriction("blocked"))
         .await
         .unwrap();
-    owner
-        .check_source(
-            &mut lease,
-            &auth,
-            &common::config().membership_action,
-            common::now() as u64,
-        )
-        .await
-        .unwrap();
+    // A block is total: the membership action is refused exactly like the account action.
     assert!(matches!(
         owner
-            .check_source(&mut lease, &auth, ACCOUNT, common::now() as u64)
+            .check_source(
+                &mut lease,
+                &auth,
+                &common::config().membership_action,
+                common::now() as u64,
+            )
             .await,
         Err(Error::Restricted)
     ));
