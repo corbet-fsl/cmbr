@@ -1094,3 +1094,4 @@ async fn a_member_whose_lease_ended_cannot_return_with_a_fresh_policy() {
         State::Released
     );
 }
+mod cancelled_revocation;

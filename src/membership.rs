@@ -805,15 +805,21 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         auth: &Authentication,
         credential: ckyh::CredentialID,
     ) -> Result<Record> {
-        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
-        async {
-            let row = self.authenticated(auth, self.now()?).await?;
-            let keys = self.passkeys.clone();
+        let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let membership = self.clone();
+        let auth = auth.clone();
+        completing(async move {
+            // The synchronous Keyhole write can outlive a cancelled request.
+            // Keep its lock until completion so outbox projection cannot read
+            // and acknowledge the pre-mutation signal while that write runs.
+            let _guard = guard;
+            let row = membership.authenticated(&auth, membership.now()?).await?;
+            let keys = membership.passkeys.clone();
             let user = row.user();
-            self.storage.signal_revocation(row.subject()).await?;
+            membership.storage.signal_revocation(row.subject()).await?;
             blocking(move || keys.revoke(user, &credential)).await?;
-            self.release_if_lost(row, self.now()?).await
-        }
+            membership.release_if_lost(row, membership.now()?).await
+        })
         .await
     }
 
