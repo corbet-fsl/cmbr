@@ -28,6 +28,18 @@ async fn contract(store: impl Storage) {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].credential, b"two");
     assert_eq!(remaining[0].key, key);
+    // Pending keys are one per passkey, replaceable and clearable.
+    if store.set_pending_device("a", b"two", key, 90).await.is_ok() {
+        store
+            .set_pending_device("a", b"two", key, 91)
+            .await
+            .unwrap();
+        let waiting = store.pending_devices("a").await.unwrap();
+        assert_eq!((waiting.len(), waiting[0].expires), (1, 91));
+        assert!(store.pending_devices("b").await.unwrap().is_empty());
+        store.clear_pending_device("a", b"two").await.unwrap();
+        assert!(store.pending_devices("a").await.unwrap().is_empty());
+    }
     assert_eq!(store.probation("a").await.unwrap(), None);
     store.initialize_probation("a", 14 * 86400).await.unwrap();
     store.initialize_probation("a", 30 * 86400).await.unwrap();
@@ -67,6 +79,7 @@ async fn libsql_coarse_facts_are_indexed_isolated_and_persistent() {
     let history = [
         crlt::Migration::new(1, "cmbr", SCHEMA),
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+        crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
     ];
     db.migrate(&history).await.unwrap();
     contract(LibsqlStorage::new(&db, "test").unwrap()).await;
@@ -249,6 +262,7 @@ async fn libsql_rejects_real_dynamic_type_corruption_and_keeps_atomic_outbox() {
     db.migrate(&[
         crlt::Migration::new(1, "cmbr", SCHEMA),
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+        crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
     ])
     .await
     .unwrap();

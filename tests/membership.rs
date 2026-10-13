@@ -657,3 +657,48 @@ async fn additional_registration_rejects_substitution_revocation_and_expiry() {
             .is_err()
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_device_key_grants_nothing_until_confirmed_expires_and_can_be_revoked() {
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "a", clock.clone());
+    let (_, first) = pending(&m, "a").await;
+    m.admit_test(
+        &first.authentication,
+        &policy("a"),
+        &[test_gate("a", SUBJECT)],
+        lease(),
+    )
+    .await
+    .unwrap();
+    let key = |seed: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let (one, two) = (key(41), key(42));
+    let auth = &first.authentication;
+    // Pending grants nothing, and only the exact pending key can be confirmed.
+    m.authorize_pending_device_key(auth, one).await.unwrap();
+    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
+    assert!(m.confirm_device_key(auth, two).await.is_err());
+    m.confirm_device_key(auth, one).await.unwrap();
+    assert_eq!(m.current_device_keys(auth).await.unwrap(), vec![one]);
+    // Confirming again is idempotent; a passkey with a live key cannot pend another.
+    m.confirm_device_key(auth, one).await.unwrap();
+    assert!(m.authorize_pending_device_key(auth, two).await.is_err());
+    // Revocation removes the key and refuses an unknown one.
+    m.revoke_device_key(auth, one).await.unwrap();
+    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
+    assert!(m.revoke_device_key(auth, one).await.is_err());
+    // A pending key can be revoked before it is confirmed.
+    m.authorize_pending_device_key(auth, two).await.unwrap();
+    m.revoke_device_key(auth, two).await.unwrap();
+    assert!(m.confirm_device_key(auth, two).await.is_err());
+    // A pending key expires on its own and then cannot be confirmed.
+    m.authorize_pending_device_key(auth, two).await.unwrap();
+    clock.set(now() + cmbr::PENDING_DEVICE_SECONDS as i64 + 1);
+    assert!(m.confirm_device_key(auth, two).await.is_err());
+    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
+}

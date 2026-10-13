@@ -122,6 +122,7 @@ pub fn migrations() -> Vec<crlt::Migration<'static>> {
         ("cgts", cgts::SCHEMA),
         ("creation", cmbr::CREATION_SCHEMA),
         ("role-redemptions", cmbr::ROLE_REDEMPTION_SCHEMA),
+        ("cmbr-device-pending", cmbr::DEVICE_PENDING_SCHEMA),
     ]);
     schemas
         .into_iter()
