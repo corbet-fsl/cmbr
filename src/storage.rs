@@ -32,6 +32,27 @@ pub const DEVICE_KEYS_SCHEMA: &str = "CREATE TABLE cmbr_device_keys (
     PRIMARY KEY (community_id, subject, credential, signing_key)
 ) WITHOUT ROWID;";
 
+/// Append after `DEVICE_KEYS_SCHEMA`. One pending device key per passkey, granting nothing
+/// until confirmed and dropped once `expires` has passed.
+pub const DEVICE_PENDING_SCHEMA: &str = "CREATE TABLE cmbr_device_pending (
+    community_id TEXT NOT NULL, subject TEXT NOT NULL,
+    credential BLOB NOT NULL CHECK (length(credential) BETWEEN 1 AND 1024),
+    signing_key BLOB NOT NULL CHECK (length(signing_key) = 32),
+    expires INTEGER NOT NULL CHECK (expires > 0),
+    PRIMARY KEY (community_id, subject, credential)
+) WITHOUT ROWID;";
+
+/// A device key authorized for pairing but not yet covered by a published lineage.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PendingDeviceKey {
+    /// Community-local credential ID that authorized the key.
+    pub credential: Vec<u8>,
+    /// Public Ed25519 signing key.
+    pub key: [u8; 32],
+    /// Unix second after which this pending key no longer exists.
+    pub expires: u64,
+}
+
 /// Public signing key linked to the exact passkey that authorized it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DeviceKeyBinding {
@@ -73,6 +94,25 @@ pub trait Storage: Send + Sync {
         &self,
         member: &str,
     ) -> impl Future<Output = Result<Vec<DeviceKeyBinding>>> + Send;
+    /// Replace this passkey's single pending device key. A pending key is never live.
+    fn set_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        key: [u8; 32],
+        expires: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Remove this passkey's pending device key, if any.
+    fn clear_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Read stored pending keys (expired ones included; callers compare `expires`).
+    fn pending_devices(
+        &self,
+        member: &str,
+    ) -> impl Future<Output = Result<Vec<PendingDeviceKey>>> + Send;
     /// None means never initialized; Some(None) means probation has ended.
     fn probation(&self, member: &str) -> impl Future<Output = Result<Option<Option<u64>>>> + Send;
     /// Initialize once after admission. Existing probation never restarts or slides.
@@ -158,6 +198,7 @@ fn limit(value: usize) -> Result<i64> {
 struct MemoryState {
     probation: BTreeMap<String, Option<u64>>,
     devices: BTreeMap<(String, Vec<u8>), BTreeSet<[u8; 32]>>,
+    pending: BTreeMap<(String, Vec<u8>), ([u8; 32], u64)>,
     revocations: BTreeMap<String, (u64, bool)>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
@@ -194,6 +235,47 @@ impl Storage for MemoryStorage {
             keys.iter().copied().collect(),
         );
         Ok(())
+    }
+    async fn set_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        key: [u8; 32],
+        expires: u64,
+    ) -> Result<()> {
+        device_input(member, credential, &[key])?;
+        i64::try_from(expires).map_err(|_| Error::InvalidInput)?;
+        self.state
+            .lock()
+            .await
+            .pending
+            .insert((member.into(), credential.into()), (key, expires));
+        Ok(())
+    }
+    async fn clear_pending_device(&self, member: &str, credential: &[u8]) -> Result<()> {
+        device_input(member, credential, &[])?;
+        self.state
+            .lock()
+            .await
+            .pending
+            .remove(&(member.to_owned(), credential.to_vec()));
+        Ok(())
+    }
+    async fn pending_devices(&self, member: &str) -> Result<Vec<PendingDeviceKey>> {
+        crate::text(member)?;
+        Ok(self
+            .state
+            .lock()
+            .await
+            .pending
+            .iter()
+            .filter(|((subject, _), _)| subject == member)
+            .map(|((_, credential), (key, expires))| PendingDeviceKey {
+                credential: credential.clone(),
+                key: *key,
+                expires: *expires,
+            })
+            .collect())
     }
     async fn device_keys(&self, member: &str) -> Result<Vec<DeviceKeyBinding>> {
         crate::text(member)?;
@@ -354,6 +436,67 @@ impl Storage for LibsqlStorage {
         }
         tx.commit().await?;
         Ok(())
+    }
+    async fn set_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        key: [u8; 32],
+        expires: u64,
+    ) -> Result<()> {
+        device_input(member, credential, &[key])?;
+        let expires = i64::try_from(expires).map_err(|_| Error::InvalidInput)?;
+        let mut tx = self.scope.tx().await?;
+        tx.execute(
+            "DELETE FROM cmbr_device_pending WHERE subject = ?1 AND credential = ?2",
+            params![member, credential],
+        )
+        .await?;
+        tx.execute(
+            "INSERT INTO cmbr_device_pending (subject, credential, signing_key, expires) VALUES (?1, ?2, ?3, ?4)",
+            params![member, credential, key.as_slice(), expires],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    async fn clear_pending_device(&self, member: &str, credential: &[u8]) -> Result<()> {
+        device_input(member, credential, &[])?;
+        let mut tx = self.scope.tx().await?;
+        tx.execute(
+            "DELETE FROM cmbr_device_pending WHERE subject = ?1 AND credential = ?2",
+            params![member, credential],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    async fn pending_devices(&self, member: &str) -> Result<Vec<PendingDeviceKey>> {
+        crate::text(member)?;
+        let rows = self.scope.query("SELECT credential, signing_key, expires FROM cmbr_device_pending WHERE subject = ?1 ORDER BY credential LIMIT 1025", [member]).await?;
+        if rows.len() > 1024 {
+            return Err(Error::Unavailable);
+        }
+        rows.iter()
+            .map(|row| {
+                let crlt::Value::Blob(credential) = row.get_value(0)? else {
+                    return Err(Error::Unavailable);
+                };
+                let crlt::Value::Blob(key) = row.get_value(1)? else {
+                    return Err(Error::Unavailable);
+                };
+                let crlt::Value::Integer(expires) = row.get_value(2)? else {
+                    return Err(Error::Unavailable);
+                };
+                let key: [u8; 32] = key.as_slice().try_into().map_err(|_| Error::Unavailable)?;
+                device_input(member, credential, &[key]).map_err(|_| Error::Unavailable)?;
+                Ok(PendingDeviceKey {
+                    credential: credential.clone(),
+                    key,
+                    expires: u64::try_from(*expires).map_err(|_| Error::Unavailable)?,
+                })
+            })
+            .collect()
     }
     async fn device_keys(&self, member: &str) -> Result<Vec<DeviceKeyBinding>> {
         crate::text(member)?;

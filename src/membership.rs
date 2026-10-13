@@ -95,6 +95,9 @@ pub enum Warning {
     AddSecondDeviceOrSyncedPasskey,
 }
 
+/// Seconds a pairing device key stays pending before it expires on its own.
+pub const PENDING_DEVICE_SECONDS: u64 = 300;
+
 /// Membership service for one community. All leaf capabilities stay private.
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
@@ -632,6 +635,103 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         self.storage
             .set_device_keys(row.subject(), auth.credential_id().as_ref(), &[key])
             .await
+    }
+
+    /// Authorize a device key for a pairing: pending, granting nothing, and gone after
+    /// `PENDING_DEVICE_SECONDS` unless confirmed. The caller needs the same live passkey
+    /// and explicit device intent as `authorize_device_key`; a passkey that already has a
+    /// live key is refused (key substitution), and one pending key per passkey is kept.
+    pub async fn authorize_pending_device_key(
+        &self,
+        auth: &Authentication,
+        key: [u8; 32],
+    ) -> Result<()> {
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let now = self.now()?;
+        let row = self.authenticated(auth, now).await?;
+        crate::storage::device_input(row.subject(), auth.credential_id().as_ref(), &[key])?;
+        let credential = auth.credential_id();
+        let live = self.storage.device_keys(row.subject()).await?;
+        if live
+            .iter()
+            .any(|binding| binding.credential == credential.as_ref())
+        {
+            return Err(Error::Identity);
+        }
+        let now = u64::try_from(now).map_err(|_| Error::Unavailable)?;
+        self.storage
+            .set_pending_device(
+                row.subject(),
+                credential.as_ref(),
+                key,
+                now.saturating_add(PENDING_DEVICE_SECONDS),
+            )
+            .await
+    }
+
+    /// Make this passkey's pending device key live, once the lineage revision containing
+    /// it is published. An expired, absent or different pending key is refused; confirming
+    /// an already live identical key is idempotent.
+    pub async fn confirm_device_key(&self, auth: &Authentication, key: [u8; 32]) -> Result<()> {
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let now = self.now()?;
+        let row = self.authenticated(auth, now).await?;
+        let credential = auth.credential_id();
+        let live = self.storage.device_keys(row.subject()).await?;
+        if live
+            .iter()
+            .any(|binding| binding.credential == credential.as_ref() && binding.key == key)
+        {
+            return Ok(());
+        }
+        let now = u64::try_from(now).map_err(|_| Error::Unavailable)?;
+        let pending = self
+            .storage
+            .pending_devices(row.subject())
+            .await?
+            .into_iter()
+            .find(|pending| pending.credential == credential.as_ref())
+            .ok_or(Error::Identity)?;
+        if pending.key != key || pending.expires <= now {
+            return Err(Error::Identity);
+        }
+        self.storage
+            .set_device_keys(row.subject(), credential.as_ref(), &[key])
+            .await?;
+        self.storage
+            .clear_pending_device(row.subject(), credential.as_ref())
+            .await
+    }
+
+    /// Remove one of this member's device keys, live or pending (a lost device). The
+    /// revocation is signalled before the binding goes. An unknown key is refused.
+    pub async fn revoke_device_key(&self, auth: &Authentication, key: [u8; 32]) -> Result<()> {
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let row = self.authenticated(auth, self.now()?).await?;
+        let live = self.storage.device_keys(row.subject()).await?;
+        let pending = self.storage.pending_devices(row.subject()).await?;
+        let owner = live.iter().find(|binding| binding.key == key);
+        let waiting = pending.iter().find(|pending| pending.key == key);
+        if owner.is_none() && waiting.is_none() {
+            return Err(Error::Identity);
+        }
+        self.storage.signal_revocation(row.subject()).await?;
+        if let Some(owner) = owner {
+            let remaining: Vec<[u8; 32]> = live
+                .iter()
+                .filter(|binding| binding.credential == owner.credential && binding.key != key)
+                .map(|binding| binding.key)
+                .collect();
+            self.storage
+                .set_device_keys(row.subject(), &owner.credential, &remaining)
+                .await?;
+        }
+        if let Some(waiting) = waiting {
+            self.storage
+                .clear_pending_device(row.subject(), &waiting.credential)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Current server authority for pairing and credential composition. A removed
