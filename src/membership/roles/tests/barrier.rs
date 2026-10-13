@@ -49,7 +49,15 @@ async fn cancelled_real_barrier_acquisition_cannot_reuse_the_old_role_observatio
     }));
     poll_fn(|context| match pending.as_mut().poll(context) {
         Poll::Pending => Poll::Ready(()),
-        Poll::Ready(_) => panic!("the real competing writer must prevent release"),
+        // The barrier either waits for the competing writer or, when the pool
+        // refuses at its deadline, fails closed. It must never release.
+        Poll::Ready(result) => {
+            assert!(
+                matches!(result, Err(Error::Unavailable)),
+                "released under a competing writer"
+            );
+            Poll::Ready(())
+        }
     })
     .await;
     drop(pending);

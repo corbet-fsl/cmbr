@@ -39,6 +39,11 @@ async fn open(path: &std::path::Path) -> crlt::Db {
         "cgts",
         cgts::SCHEMA,
     ));
+    history.push(crlt::Migration::new(
+        history.len() as u32 + 1,
+        "cmbr-device-pending",
+        crate::DEVICE_PENDING_SCHEMA,
+    ));
     db.migrate(&history).await.unwrap();
     db
 }
@@ -323,7 +328,7 @@ async fn scope_reopen_and_missing_schema_refuse_without_partial_phase() {
     ));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn explicit_legacy_adoption_keeps_actual_root_and_admitted_proof_without_receipt() {
     let fixture = Fixture::new().await;
     let facade = common::facade(&fixture.db, COMMUNITY, common::Clock::new());
