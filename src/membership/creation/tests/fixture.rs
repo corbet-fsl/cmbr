@@ -73,7 +73,6 @@ pub(super) fn migrations() -> Vec<crlt::Migration<'static>> {
         ("rulebook", crbk::SCHEMA),
         ("signing", cplc::csgn::SCHEMA),
         ("policy", cplc::SCHEMA),
-        ("role-redemptions", crate::ROLE_REDEMPTION_SCHEMA),
     ]);
     schemas
         .into_iter()
@@ -143,69 +142,18 @@ impl Fixture {
         }
     }
 
-    pub fn invitation(&self, id: &str, community: &str, member: &[u8], until: u64) -> Vec<u8> {
-        // The original role codec is exercised with the ACTUAL target Policy's
-        // configured public key. This separate test-owned signer issues only
-        // fixture invitations, not production issuance authority or a Root row.
-        let mut signer = cplc::csgn::Signer::new(
-            COMMUNITY,
-            cplc::csgn::SecretKey::from_seed(&mut [18; 32]),
-            cplc::day(common::now() as u64),
-            30 * cplc::DAY,
-        )
-        .unwrap();
-        assert_eq!(
-            signer.key_ring().active().unwrap().public_key(),
-            self.policy
-                .key_ring()
-                .unwrap()
-                .active()
-                .unwrap()
-                .public_key(),
-        );
-        let binding = cvch::member_binding(&cvch::receipt_id(id), member);
-        let fields = cvch::role::Invitation {
-            id,
-            community,
-            member_binding: &binding,
-            purpose: cvch::role::Purpose::BootstrapRoot,
-            issued_at: cplc::day(common::now() as u64),
-            valid_until: until,
-        };
-        signer
-            .sign(
-                cplc::csgn::Kind::Credential,
-                &cvch::role::issuance_bytes(&fields).unwrap(),
-                fields.issued_at,
-                fields.valid_until,
-            )
-            .unwrap()
+    pub fn first_invitation(&self) -> String {
+        "original-first-root".to_owned()
     }
 
-    pub fn first_invitation(&self) -> Vec<u8> {
-        self.invitation(
-            "original-first-root",
-            COMMUNITY,
-            common::SUBJECT.as_bytes(),
-            common::now() as u64 + 600,
-        )
-    }
-
-    pub async fn initialize(&self, bytes: &[u8]) {
-        let verified = cvch::role::verify(
-            bytes,
-            self.policy.key_ring().unwrap(),
-            &cvch::role::Context {
-                community: COMMUNITY,
-                member: common::SUBJECT.as_bytes(),
-                purpose: cvch::role::Purpose::BootstrapRoot,
-                now: common::now() as u64,
-            },
-        )
-        .unwrap();
+    pub async fn initialize(&self, id: &str) {
         assert_eq!(
             self.owner
-                .initialize_community_creation(&verified, common::SUBJECT.as_bytes())
+                .initialize_community_creation(
+                    id,
+                    common::SUBJECT.as_bytes(),
+                    common::now() as u64 + 600,
+                )
                 .await
                 .unwrap(),
             CommunityPhase::Creating,

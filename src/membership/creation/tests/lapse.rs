@@ -7,7 +7,7 @@ async fn admitted(fixture: &Fixture) -> Record {
     fixture.initialize(&invitation).await;
     let row = fixture
         .owner
-        .admit_first_root(fixture.request(), &invitation)
+        .admit_first_admin(fixture.request(), &invitation)
         .await
         .unwrap();
     assert_eq!(row.state(), State::Admitted);
@@ -24,7 +24,7 @@ async fn admitted(fixture: &Fixture) -> Record {
             .unwrap()
             .unwrap()
             .role,
-        crgs::Role::Root
+        crgs::Role::Admin
     );
     assert!(fixture.owner.revocations(10).await.unwrap().is_empty());
     // Reset only the fixture's measurement; the real session, its expiry and
@@ -207,7 +207,7 @@ async fn negative_decision_never_activates_creating_or_grants_a_root() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await
             .unwrap()
             .state(),

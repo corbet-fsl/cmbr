@@ -51,6 +51,7 @@ impl Pending {
     pub(crate) fn receipt(&self) -> &str {
         &self.receipt
     }
+    #[cfg(test)]
     pub(crate) fn binding(&self) -> &str {
         &self.binding
     }

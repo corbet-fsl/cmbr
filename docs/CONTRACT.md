@@ -279,11 +279,12 @@ available read connection refuses within its configured timeout.
 
 Community creation has an explicit separate `CREATION_SCHEMA`, appended after
 the application's existing migration history. An absent phase refuses admission.
-The trusted creation host initializes `Creating` only from the original verified
-recipient-bound BootstrapRoot entitlement; this creates no member or role.
-`admit_first_root` re-verifies its original COSE under the retained current target
-Policy, evaluates the full configured gates at their original checked time, and
-stages lifecycle, Root admission, receipt spend, probation and `Active` in one
+The trusted global creation host (which has authenticated the creator and spent
+the creation token) initializes `Creating` with a creation id, the creator and an
+expiry; this creates no member or role. `admit_first_admin` checks the creation
+id against the recorded commitment, evaluates the full configured gates at their
+original checked time, and stages lifecycle, Admin admission, receipt spend,
+probation and `Active` in one
 transaction. Ordinary `admit_current` requires an already active phase in that
 same writer. Unsupported atomic probation storage refuses.
 

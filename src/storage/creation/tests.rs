@@ -104,48 +104,10 @@ fn root_id() -> crgs::MemberId {
 
 fn invitation(id: &str) -> (Pending, cgts::Claim) {
     let now = common::now() as u64;
-    let mut signer = cplc::csgn::Signer::new(
-        "root",
-        cplc::csgn::SecretKey::from_seed(&mut [7; 32]),
-        cplc::day(now),
-        now + 7200,
-    )
-    .unwrap();
-    let binding = cvch::member_binding(&cvch::receipt_id(id), root_id().as_bytes());
-    let fields = cvch::role::Invitation {
-        id,
-        community: COMMUNITY,
-        member_binding: &binding,
-        purpose: cvch::role::Purpose::BootstrapRoot,
-        issued_at: cplc::day(now),
-        valid_until: now + 3600,
-    };
-    let cose = signer
-        .sign(
-            cplc::csgn::Kind::Credential,
-            &cvch::role::issuance_bytes(&fields).unwrap(),
-            fields.issued_at,
-            fields.valid_until,
-        )
-        .unwrap();
-    let verified = cvch::role::verify(
-        &cose,
-        signer.key_ring(),
-        &cvch::role::Context {
-            community: COMMUNITY,
-            member: root_id().as_bytes(),
-            purpose: cvch::role::Purpose::BootstrapRoot,
-            now,
-        },
-    )
-    .unwrap();
-    let pending = Pending::new(
-        verified.receipt(),
-        verified.binding(),
-        verified.valid_until(),
-    )
-    .unwrap();
-    let claim = cgts::Claim::new("cvch", verified.receipt().as_bytes().to_vec()).unwrap();
+    let receipt = cvch::receipt_id(id);
+    let binding = cvch::member_binding(&receipt, root_id().as_bytes());
+    let pending = Pending::new(&receipt, &binding, now + 3600).unwrap();
+    let claim = cgts::Claim::new("cvch", receipt.as_bytes().to_vec()).unwrap();
     (pending, claim)
 }
 

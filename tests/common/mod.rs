@@ -121,7 +121,6 @@ pub fn migrations() -> Vec<crlt::Migration<'static>> {
         ("cmbr-device-keys", cmbr::DEVICE_KEYS_SCHEMA),
         ("cgts", cgts::SCHEMA),
         ("creation", cmbr::CREATION_SCHEMA),
-        ("role-redemptions", cmbr::ROLE_REDEMPTION_SCHEMA),
     ]);
     schemas
         .into_iter()

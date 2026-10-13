@@ -1,27 +1,18 @@
 //! Complete role-entitled and ordinary admission share one original writer.
 use super::*;
-use crate::storage::role_redemptions::{Redemption, RoleRedemptions};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 enum Entitlement<'a> {
     Ordinary,
-    FirstRoot(&'a [u8]),
-    FounderAdmin(&'a [u8]),
+    /// Creation id of the community whose creator takes the first admin seat.
+    FirstAdmin(&'a str),
 }
-impl<'a> Entitlement<'a> {
-    fn invitation(self) -> Option<(&'a [u8], cvch::role::Purpose)> {
-        match self {
-            Self::Ordinary => None,
-            Self::FirstRoot(bytes) => Some((bytes, cvch::role::Purpose::BootstrapRoot)),
-            Self::FounderAdmin(bytes) => Some((bytes, cvch::role::Purpose::FounderAdmin)),
-        }
-    }
+impl Entitlement<'_> {
     fn role(self) -> crgs::Role {
         match self {
             Self::Ordinary => crgs::Role::Member,
-            Self::FirstRoot(_) => crgs::Role::Root,
-            Self::FounderAdmin(_) => crgs::Role::Admin,
+            Self::FirstAdmin(_) => crgs::Role::Admin,
         }
     }
 }
@@ -66,28 +57,16 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             .await
     }
 
-    /// Redeem only the exact initialized BootstrapRoot entitlement, together
-    /// with genuine full configured admission. Receipt, Root, lifecycle, phase
-    /// and probation are one effect; cancellation rolls back the owned writer.
-    /// An exact active retry is read-only and cannot extend the original lease.
-    pub async fn admit_first_root<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
+    /// Admit the recorded creator as first admin, together with genuine full
+    /// configured admission. Commitment, admin, lifecycle and phase are one
+    /// effect; cancellation rolls back the owned writer. An exact active retry
+    /// is read-only and cannot extend the original lease.
+    pub async fn admit_first_admin<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
         &self,
         request: AdmissionRequest<'_, R, P, K>,
-        invitation: &[u8],
+        id: &str,
     ) -> Result<Record> {
-        self.admit_creation_current(request, Entitlement::FirstRoot(invitation))
-            .await
-    }
-
-    /// Redeem the original FounderAdmin invitation only while joining an active
-    /// community through full current admission. Existing members cannot be
-    /// promoted by this path. An exact retained effect retry is read-only.
-    pub async fn admit_founder_admin<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
-        &self,
-        request: AdmissionRequest<'_, R, P, K>,
-        invitation: &[u8],
-    ) -> Result<Record> {
-        self.admit_creation_current(request, Entitlement::FounderAdmin(invitation))
+        self.admit_creation_current(request, Entitlement::FirstAdmin(id))
             .await
     }
 
@@ -97,7 +76,6 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         entitlement: Entitlement<'_>,
     ) -> Result<Record> {
         let auth = request.authentication;
-        let policy = request.policy;
         let snapshot = request.snapshot;
         let checked_at = request.checked_at;
         let lease = request.lease;
@@ -118,36 +96,32 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         if original.state().is_terminal() {
             return Err(Error::Transition);
         }
-        // Reverify the original COSE under THIS actual retained target Policy,
-        // not a previously cached Verified invitation or a caller-selected ring.
-        let verified = entitlement
-            .invitation()
-            .map(|(bytes, purpose)| {
-                let ring = policy.key_ring().map_err(|_| Error::Policy)?;
-                cvch::role::verify(
-                    bytes,
-                    ring,
-                    &cvch::role::Context {
-                        community: self.community(),
-                        member: original.member_id().as_bytes(),
-                        purpose,
-                        now: observed,
+        let recorded = self.creation().read(tx).await?;
+        let (tx, phase) = recorded;
+        let pending = match (entitlement, &phase) {
+            (Entitlement::Ordinary, _) => None,
+            (
+                Entitlement::FirstAdmin(id),
+                Some(
+                    Phase::Creating(current)
+                    | Phase::Active {
+                        pending: current, ..
                     },
-                )
-                .map_err(|_| Error::Policy)
-            })
-            .transpose()?;
-        let pending = verified
-            .as_ref()
-            .map(|value| {
-                if cvch::member_binding(value.receipt(), original.member_id().as_bytes())
-                    != value.binding()
-                {
+                ),
+            ) => {
+                let receipt = cvch::receipt_id(id);
+                let expected = Pending::new(
+                    &receipt,
+                    &cvch::member_binding(&receipt, original.member_id().as_bytes()),
+                    current.expires(),
+                )?;
+                if &expected != current {
                     return Err(Error::Identity);
                 }
-                Pending::new(value.receipt(), value.binding(), value.valid_until())
-            })
-            .transpose()?;
+                Some(expected)
+            }
+            _ => return Err(Error::Transition),
+        };
         let until = snapshot
             .valid_until()
             .min(session.valid_until())
@@ -163,51 +137,18 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             Ok(())
         };
         cut()?;
-        let (tx, phase) = self.creation().read(tx).await?;
-        let redemptions = RoleRedemptions::new(self.authority_scope.clone());
-        let (tx, redemption) = if matches!(entitlement, Entitlement::FounderAdmin(_)) {
-            let pending = pending.as_ref().ok_or(Error::Transition)?;
-            redemptions.read(tx, pending.receipt()).await?
-        } else {
-            (tx, None)
-        };
         let retry = match (entitlement, &pending, &phase) {
             (
                 Entitlement::Ordinary,
                 None,
                 Some(Phase::Active { .. } | Phase::LegacyActive { .. }),
             ) => false,
-            (Entitlement::FirstRoot(_), Some(expected), Some(Phase::Creating(current)))
-                if expected == current =>
-            {
-                false
-            }
-            (Entitlement::FirstRoot(_), Some(expected), Some(Phase::Active { pending, root }))
-                if expected == pending && root == &original.member_id() =>
-            {
-                true
-            }
-            (
-                Entitlement::FounderAdmin(_),
-                Some(pending),
-                Some(Phase::Active { .. } | Phase::LegacyActive { .. }),
-            ) => {
-                if let Some(effect) = redemption {
-                    let expected = Redemption::new(
-                        pending.receipt(),
-                        pending.binding(),
-                        pending.expires(),
-                        original.member_id(),
-                        lease,
-                        original.revision(),
-                    )?;
-                    if effect != expected {
-                        return Err(Error::Transition);
-                    }
-                    true
-                } else {
-                    false
+            (Entitlement::FirstAdmin(_), Some(_), Some(Phase::Creating(_))) => false,
+            (Entitlement::FirstAdmin(_), Some(_), Some(Phase::Active { root, .. })) => {
+                if root != &original.member_id() {
+                    return Err(Error::Transition);
                 }
+                true
             }
             _ => return Err(Error::Transition),
         };
@@ -308,19 +249,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 .claim_in_transaction(tx, &claim)
                 .await
                 .map_err(|_| Error::Transition)?;
-            if matches!(entitlement, Entitlement::FirstRoot(_)) {
-                (tx, _) = self.creation().activate(tx, &pending, &member.id).await?;
-            } else {
-                let effect = Redemption::new(
-                    pending.receipt(),
-                    pending.binding(),
-                    pending.expires(),
-                    member.id.clone(),
-                    member.lease_end,
-                    row.revision(),
-                )?;
-                tx = redemptions.insert(tx, &effect).await?;
-            }
+            (tx, _) = self.creation().activate(tx, &pending, &member.id).await?;
         }
         let durations = crbk::MembershipSettings::from_snapshot(snapshot.settings())
             .map_err(|_| Error::Policy)?;

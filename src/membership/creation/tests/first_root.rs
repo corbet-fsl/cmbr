@@ -8,7 +8,7 @@ async fn real_first_root_commits_phase_receipt_lifecycle_and_probation_together(
     fixture.assert_pending().await;
     let admitted = fixture
         .owner
-        .admit_first_root(fixture.request(), &invitation)
+        .admit_first_admin(fixture.request(), &invitation)
         .await
         .unwrap();
     assert_eq!(admitted.state(), State::Admitted);
@@ -23,7 +23,7 @@ async fn real_first_root_commits_phase_receipt_lifecycle_and_probation_together(
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(root.role, crgs::Role::Root);
+    assert_eq!(root.role, crgs::Role::Admin);
     assert_eq!(root.lease_end, common::lease());
     assert!(root.handle.is_some());
     let probation = fixture
@@ -52,7 +52,7 @@ async fn real_first_root_commits_phase_receipt_lifecycle_and_probation_together(
     // Same receipt, member, policy and ORIGINAL lease is an exact read-only retry.
     let retry = fixture
         .owner
-        .admit_first_root(fixture.request(), &invitation)
+        .admit_first_admin(fixture.request(), &invitation)
         .await
         .unwrap();
     assert_eq!(retry, admitted);
@@ -72,7 +72,7 @@ async fn real_first_root_commits_phase_receipt_lifecycle_and_probation_together(
     let mut changed = fixture.request();
     changed.lease = crgs::YearMonth::new(2027, 8).unwrap();
     assert_eq!(
-        fixture.owner.admit_first_root(changed, &invitation).await,
+        fixture.owner.admit_first_admin(changed, &invitation).await,
         Err(Error::Transition)
     );
     assert_eq!(
@@ -90,7 +90,7 @@ async fn missing_actual_configured_gate_rolls_back_every_first_root_effect() {
     let mut request = fixture.request();
     request.gates = &empty;
     assert_eq!(
-        fixture.owner.admit_first_root(request, &invitation).await,
+        fixture.owner.admit_first_admin(request, &invitation).await,
         Err(Error::Policy)
     );
     fixture.assert_pending().await;
@@ -98,7 +98,7 @@ async fn missing_actual_configured_gate_rolls_back_every_first_root_effect() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await
             .unwrap()
             .state(),

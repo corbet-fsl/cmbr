@@ -88,38 +88,16 @@ pub async fn ensure_active<C: clbs::Clock + 'static>(
         now(),
     )
     .await;
-    let binding = cvch::member_binding(&cvch::receipt_id("fixture-first-root"), subject.as_bytes());
-    let fields = cvch::role::Invitation {
-        id: "fixture-first-root",
-        community: owner.community(),
-        member_binding: &binding,
-        purpose: cvch::role::Purpose::BootstrapRoot,
-        issued_at: cplc::day(now() as u64),
-        valid_until: now() as u64 + 3600,
-    };
-    // The ACTUAL persistent target Policy issues the original recipient-bound
-    // entitlement. No admitted row, role or phase is fabricated.
-    let invitation = policy.issue_role_invitation(&fields).await.unwrap();
-    let verified = cvch::role::verify(
-        &invitation,
-        policy.key_ring().unwrap(),
-        &cvch::role::Context {
-            community: owner.community(),
-            member: subject.as_bytes(),
-            purpose: cvch::role::Purpose::BootstrapRoot,
-            now: now() as u64,
-        },
-    )
-    .unwrap();
+    let valid_until = now() as u64 + 3600;
     assert_eq!(
         owner
-            .initialize_community_creation(&verified, subject.as_bytes())
+            .initialize_community_creation("fixture-first-root", subject.as_bytes(), valid_until)
             .await?,
         cmbr::CommunityPhase::Creating
     );
-    let session = Session::new(&authentication, fields.valid_until);
+    let session = Session::new(&authentication, valid_until);
     let admitted = owner
-        .admit_first_root(
+        .admit_first_admin(
             admission_request(
                 &authentication,
                 &policy,
@@ -129,12 +107,12 @@ pub async fn ensure_active<C: clbs::Clock + 'static>(
                 lease(),
                 &session,
             ),
-            &invitation,
+            "fixture-first-root",
         )
         .await?;
     assert_eq!(admitted.state(), cnrl::State::Admitted);
     let root = owner.member(&authentication).await?.unwrap();
-    assert_eq!(root.role, crgs::Role::Root);
+    assert_eq!(root.role, crgs::Role::Admin);
     assert_eq!(root.id.as_bytes(), subject.as_bytes());
     assert_eq!(owner.community_phase().await?, cmbr::CommunityPhase::Active);
     Ok(())

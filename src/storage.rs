@@ -1,7 +1,6 @@
 use crate::{Error, Result};
 pub(crate) mod creation;
 mod probation;
-pub(crate) mod role_redemptions;
 use crlt::{Community, params};
 use std::{
     collections::{BTreeMap, BTreeSet},

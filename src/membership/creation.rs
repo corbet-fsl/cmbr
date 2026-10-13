@@ -2,19 +2,17 @@
 use super::*;
 use crate::storage::creation::{Creation, Pending, State as Phase};
 mod admission;
-mod checked;
 mod lapse;
 pub use admission::AdmissionRequest;
-pub use checked::{CreationContext, CreationGuard, CreationRequest};
 
 /// Coarse trusted-host view. A phase does not authorize admission or a role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommunityPhase {
     /// No creation or explicitly verified legacy adoption has been recorded.
     Uninitialized,
-    /// An exact original first-Root entitlement awaits genuine full admission.
+    /// The creator's exact commitment awaits genuine full admission as first admin.
     Creating,
-    /// The original first Root and entitlement were committed atomically.
+    /// The first admin and creation record were committed atomically.
     Active,
     /// An explicit migration retained an already admitted original Root.
     LegacyActive,
@@ -37,18 +35,19 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         })
     }
 
-    /// Record the original verified BootstrapRoot invitation for an explicitly
-    /// provisioned new community. The trusted creation host authenticates the
-    /// intended passport-derived member and the authorized current issuer before
-    /// obtaining `invitation`; this method cannot sign or fabricate entitlement.
-    /// It creates no member, role or spent receipt. Any retained Register member
-    /// prevents initialization, including a released member's coarse row.
+    /// Record the creation of an explicitly provisioned new community for its
+    /// creator. The trusted global creation host authenticates the creator and
+    /// spends the creation token BEFORE calling this; membership only fixes the
+    /// exact creator commitment so that no other member can take the first
+    /// admin seat. It creates no member, role or spent receipt. Any retained
+    /// Register member prevents initialization.
     pub async fn initialize_community_creation(
         &self,
-        invitation: &cvch::role::Verified,
-        member: &[u8],
+        id: &str,
+        creator: &[u8],
+        valid_until: u64,
     ) -> Result<CommunityPhase> {
-        let pending = self.creation_invitation(invitation, member)?;
+        let pending = self.creation_pending(id, creator, valid_until)?;
         let tx = self.authority_scope.tx().await?;
         let observed = self.creation_time(pending.expires())?;
         let tx = self.register.ensure_empty_in_transaction(tx).await?;
@@ -122,23 +121,14 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Creation::new(self.authority_scope.clone())
     }
 
-    fn creation_invitation(
-        &self,
-        invitation: &cvch::role::Verified,
-        member: &[u8],
-    ) -> Result<Pending> {
-        crate::text(std::str::from_utf8(member).map_err(|_| Error::Identity)?)?;
-        if invitation.community() != self.community()
-            || invitation.purpose() != cvch::role::Purpose::BootstrapRoot
-            || cvch::member_binding(invitation.receipt(), member) != invitation.binding()
-        {
-            return Err(Error::Identity);
-        }
-        self.creation_time(invitation.valid_until())?;
+    fn creation_pending(&self, id: &str, creator: &[u8], valid_until: u64) -> Result<Pending> {
+        crate::text(std::str::from_utf8(creator).map_err(|_| Error::Identity)?)?;
+        self.creation_time(valid_until)?;
+        let receipt = cvch::receipt_id(id);
         Pending::new(
-            invitation.receipt(),
-            invitation.binding(),
-            invitation.valid_until(),
+            &receipt,
+            &cvch::member_binding(&receipt, creator),
+            valid_until,
         )
     }
 

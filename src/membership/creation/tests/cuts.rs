@@ -43,7 +43,7 @@ async fn real_sdk_and_policy_writers_are_excluded_at_staged_root_final_cut() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await
             .unwrap()
             .state(),
@@ -67,7 +67,7 @@ async fn real_sdk_and_policy_writers_are_excluded_at_staged_root_final_cut() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Passkey)
     );
@@ -83,7 +83,7 @@ async fn actual_clock_advance_at_final_staged_cut_rolls_back() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Transition)
     );
@@ -102,7 +102,7 @@ async fn removed_original_session_after_await_rolls_back_staged_first_root() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Identity)
     );
@@ -119,7 +119,7 @@ async fn session_loss_after_actual_commit_is_uncertain_and_never_claims_rollback
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Unavailable)
     );
@@ -147,7 +147,7 @@ async fn session_loss_after_actual_commit_is_uncertain_and_never_claims_rollback
             .unwrap()
             .unwrap()
             .role,
-        crgs::Role::Root
+        crgs::Role::Admin
     );
     assert!(
         fixture
@@ -180,7 +180,7 @@ async fn cancelled_real_writer_wait_never_spends_or_admits_and_allows_exact_retr
     let mut operation = Box::pin(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation),
+            .admit_first_admin(fixture.request(), &invitation),
     );
     poll_fn(|context| match operation.as_mut().poll(context) {
         Poll::Pending => Poll::Ready(()),
@@ -193,7 +193,7 @@ async fn cancelled_real_writer_wait_never_spends_or_admits_and_allows_exact_retr
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await
             .unwrap()
             .state(),
@@ -215,7 +215,7 @@ async fn actual_sdk_revocation_refuses_first_root_without_spending_the_invitatio
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Passkey)
     );
@@ -279,7 +279,7 @@ async fn genuine_current_legal_order_prevents_root_and_preserves_creation() {
     assert_eq!(
         fixture
             .owner
-            .admit_first_root(fixture.request(), &invitation)
+            .admit_first_admin(fixture.request(), &invitation)
             .await,
         Err(Error::Restricted)
     );
