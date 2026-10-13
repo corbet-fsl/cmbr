@@ -9,9 +9,13 @@ enum Entitlement<'a> {
     FirstAdmin(&'a str),
 }
 impl Entitlement<'_> {
-    fn role(self) -> crgs::Role {
+    /// The first seat of the Root board community itself is a Root seat: the
+    /// board has no higher authority to promote its first member. Every other
+    /// community's creator becomes its first admin.
+    fn role(self, community: &str) -> crgs::Role {
         match self {
             Self::Ordinary => crgs::Role::Member,
+            Self::FirstAdmin(_) if community == "root" => crgs::Role::Root,
             Self::FirstAdmin(_) => crgs::Role::Admin,
         }
     }
@@ -172,7 +176,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         if retry {
             let existing = existing.ok_or(Error::Transition)?;
             if original.state() != State::Admitted
-                || existing.role != entitlement.role()
+                || existing.role != entitlement.role(self.community())
                 || existing.handle.is_none()
                 || existing.lease_end != lease
                 || roles::lease_deadline(existing.lease_end)? <= observed
@@ -216,7 +220,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                     crgs::Admission {
                         id: row.member_id(),
                         handle,
-                        role: entitlement.role(),
+                        role: entitlement.role(self.community()),
                         lease_end: lease,
                     },
                     current,
