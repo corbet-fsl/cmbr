@@ -669,6 +669,34 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             .await
     }
 
+    /// The existing device's approval of a member's pending device key: the caller's live
+    /// passkey must differ from the one that holds the pending key. Call it only after the
+    /// lineage revision containing the key is published; without it the key never goes live.
+    pub async fn approve_pending_device_key(
+        &self,
+        auth: &Authentication,
+        key: [u8; 32],
+    ) -> Result<()> {
+        let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
+        let now = self.now()?;
+        let row = self.authenticated(auth, now).await?;
+        let now = u64::try_from(now).map_err(|_| Error::Unavailable)?;
+        let approver = auth.credential_id();
+        let pending = self
+            .storage
+            .pending_devices(row.subject())
+            .await?
+            .into_iter()
+            .find(|pending| pending.key == key)
+            .ok_or(Error::Identity)?;
+        if pending.expires <= now || pending.credential.as_slice() == approver.as_ref() {
+            return Err(Error::Identity);
+        }
+        self.storage
+            .approve_pending_device(row.subject(), &pending.credential, approver.as_ref())
+            .await
+    }
+
     /// Make this passkey's pending device key live, once the lineage revision containing
     /// it is published. An expired, absent or different pending key is refused; confirming
     /// an already live identical key is idempotent.
@@ -693,6 +721,17 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             .find(|pending| pending.credential == credential.as_ref())
             .ok_or(Error::Identity)?;
         if pending.key != key || pending.expires <= now {
+            return Err(Error::Identity);
+        }
+        // Only a key that another live passkey of this member approved goes live: the
+        // existing device's approval, given after its new lineage revision is published.
+        let approver = pending.approver.as_ref().ok_or(Error::Identity)?;
+        let credentials = self.credentials(row.user()).await?;
+        if approver.as_slice() == credential.as_ref()
+            || !credentials
+                .iter()
+                .any(|c| !c.is_revoked() && c.credential_id().as_ref() == approver.as_slice())
+        {
             return Err(Error::Identity);
         }
         self.storage

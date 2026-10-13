@@ -659,7 +659,7 @@ async fn additional_registration_rejects_substitution_revocation_and_expiry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn pending_device_key_grants_nothing_until_confirmed_expires_and_can_be_revoked() {
+async fn pending_device_key_goes_live_only_after_the_existing_device_approves() {
     let (_dir, db) = temporary().await;
     let clock = Clock::new();
     let m = facade(&db, "a", clock.clone());
@@ -677,28 +677,58 @@ async fn pending_device_key_grants_nothing_until_confirmed_expires_and_can_be_re
             .verifying_key()
             .to_bytes()
     };
-    let (one, two) = (key(41), key(42));
-    let auth = &first.authentication;
-    // Pending grants nothing, and only the exact pending key can be confirmed.
-    m.authorize_pending_device_key(auth, one).await.unwrap();
-    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
-    assert!(m.confirm_device_key(auth, two).await.is_err());
-    m.confirm_device_key(auth, one).await.unwrap();
-    assert_eq!(m.current_device_keys(auth).await.unwrap(), vec![one]);
-    // Confirming again is idempotent; a passkey with a live key cannot pend another.
-    m.confirm_device_key(auth, one).await.unwrap();
-    assert!(m.authorize_pending_device_key(auth, two).await.is_err());
-    // Revocation removes the key and refuses an unknown one.
-    m.revoke_device_key(auth, one).await.unwrap();
-    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
-    assert!(m.revoke_device_key(auth, one).await.is_err());
-    // A pending key can be revoked before it is confirmed.
-    m.authorize_pending_device_key(auth, two).await.unwrap();
-    m.revoke_device_key(auth, two).await.unwrap();
-    assert!(m.confirm_device_key(auth, two).await.is_err());
-    // A pending key expires on its own and then cannot be confirmed.
-    m.authorize_pending_device_key(auth, two).await.unwrap();
+    let (old, new, other) = (key(41), key(42), key(43));
+    let existing = &first.authentication;
+    m.authorize_device_key(existing, old).await.unwrap();
+    // The existing device adds the new device's passkey; the new device logs in with it.
+    let (options, state) = m.begin_additional_registration(existing).await.unwrap();
+    let mut token = SoftToken::new(true).unwrap().0;
+    let mut request = options.public_key;
+    request
+        .authenticator_selection
+        .as_mut()
+        .unwrap()
+        .require_resident_key = false;
+    let response = token
+        .perform_register(ckyh::Url::parse(ORIGIN).unwrap(), request, 300_000)
+        .unwrap();
+    m.finish_additional_registration(existing, state, response.into())
+        .await
+        .unwrap();
+    let second = login(&m, &mut token, USER).await;
+    let newcomer = &second.authentication;
+    // Pending grants nothing, and nothing is live for the newcomer without an approval.
+    m.authorize_pending_device_key(newcomer, new).await.unwrap();
+    assert_eq!(m.current_device_keys(newcomer).await.unwrap(), vec![old]);
+    assert!(m.confirm_device_key(newcomer, new).await.is_err());
+    // The newcomer cannot approve itself, nor can the existing device approve another key.
+    assert!(m.approve_pending_device_key(newcomer, new).await.is_err());
+    assert!(m.approve_pending_device_key(existing, other).await.is_err());
+    assert!(m.confirm_device_key(newcomer, new).await.is_err());
+    // The existing device approves; only the exact approved key then goes live.
+    m.approve_pending_device_key(existing, new).await.unwrap();
+    assert!(m.confirm_device_key(newcomer, other).await.is_err());
+    m.confirm_device_key(newcomer, new).await.unwrap();
+    m.confirm_device_key(newcomer, new).await.unwrap();
+    let mut live = m.current_device_keys(newcomer).await.unwrap();
+    live.sort();
+    let mut expected = vec![old, new];
+    expected.sort();
+    assert_eq!(live, expected);
+    // Revocation removes a key and refuses an unknown one.
+    m.revoke_device_key(existing, new).await.unwrap();
+    assert_eq!(m.current_device_keys(existing).await.unwrap(), vec![old]);
+    assert!(m.revoke_device_key(existing, new).await.is_err());
+    // An unapproved pending key can be revoked, and an expired one cannot be approved.
+    m.authorize_pending_device_key(newcomer, other)
+        .await
+        .unwrap();
+    m.revoke_device_key(existing, other).await.unwrap();
+    assert!(m.approve_pending_device_key(existing, other).await.is_err());
+    m.authorize_pending_device_key(newcomer, other)
+        .await
+        .unwrap();
     clock.set(now() + cmbr::PENDING_DEVICE_SECONDS as i64 + 1);
-    assert!(m.confirm_device_key(auth, two).await.is_err());
-    assert!(m.current_device_keys(auth).await.unwrap().is_empty());
+    assert!(m.approve_pending_device_key(existing, other).await.is_err());
+    assert!(m.confirm_device_key(newcomer, other).await.is_err());
 }

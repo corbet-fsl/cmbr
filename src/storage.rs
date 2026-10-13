@@ -39,6 +39,7 @@ pub const DEVICE_PENDING_SCHEMA: &str = "CREATE TABLE cmbr_device_pending (
     credential BLOB NOT NULL CHECK (length(credential) BETWEEN 1 AND 1024),
     signing_key BLOB NOT NULL CHECK (length(signing_key) = 32),
     expires INTEGER NOT NULL CHECK (expires > 0),
+    approver BLOB CHECK (approver IS NULL OR length(approver) BETWEEN 1 AND 1024),
     PRIMARY KEY (community_id, subject, credential)
 ) WITHOUT ROWID;";
 
@@ -51,6 +52,8 @@ pub struct PendingDeviceKey {
     pub key: [u8; 32],
     /// Unix second after which this pending key no longer exists.
     pub expires: u64,
+    /// Another live passkey of the member that approved this key (the existing device).
+    pub approver: Option<Vec<u8>>,
 }
 
 /// Public signing key linked to the exact passkey that authorized it.
@@ -101,6 +104,13 @@ pub trait Storage: Send + Sync {
         credential: &[u8],
         key: [u8; 32],
         expires: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+    /// Record the approving passkey on this passkey's pending key.
+    fn approve_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        approver: &[u8],
     ) -> impl Future<Output = Result<()>> + Send;
     /// Remove this passkey's pending device key, if any.
     fn clear_pending_device(
@@ -194,11 +204,13 @@ fn limit(value: usize) -> Result<i64> {
         Err(Error::InvalidInput)
     }
 }
+/// Key, expiry and approving passkey of one pending device key.
+type PendingEntry = ([u8; 32], u64, Option<Vec<u8>>);
 #[derive(Default)]
 struct MemoryState {
     probation: BTreeMap<String, Option<u64>>,
     devices: BTreeMap<(String, Vec<u8>), BTreeSet<[u8; 32]>>,
-    pending: BTreeMap<(String, Vec<u8>), ([u8; 32], u64)>,
+    pending: BTreeMap<(String, Vec<u8>), PendingEntry>,
     revocations: BTreeMap<String, (u64, bool)>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
@@ -249,8 +261,30 @@ impl Storage for MemoryStorage {
             .lock()
             .await
             .pending
-            .insert((member.into(), credential.into()), (key, expires));
+            .insert((member.into(), credential.into()), (key, expires, None));
         Ok(())
+    }
+    async fn approve_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        approver: &[u8],
+    ) -> Result<()> {
+        device_input(member, credential, &[])?;
+        device_input(member, approver, &[])?;
+        match self
+            .state
+            .lock()
+            .await
+            .pending
+            .get_mut(&(member.to_owned(), credential.to_vec()))
+        {
+            Some(entry) => {
+                entry.2 = Some(approver.to_vec());
+                Ok(())
+            }
+            None => Err(Error::Identity),
+        }
     }
     async fn clear_pending_device(&self, member: &str, credential: &[u8]) -> Result<()> {
         device_input(member, credential, &[])?;
@@ -270,11 +304,14 @@ impl Storage for MemoryStorage {
             .pending
             .iter()
             .filter(|((subject, _), _)| subject == member)
-            .map(|((_, credential), (key, expires))| PendingDeviceKey {
-                credential: credential.clone(),
-                key: *key,
-                expires: *expires,
-            })
+            .map(
+                |((_, credential), (key, expires, approver))| PendingDeviceKey {
+                    credential: credential.clone(),
+                    key: *key,
+                    expires: *expires,
+                    approver: approver.clone(),
+                },
+            )
             .collect())
     }
     async fn device_keys(&self, member: &str) -> Result<Vec<DeviceKeyBinding>> {
@@ -460,6 +497,27 @@ impl Storage for LibsqlStorage {
         tx.commit().await?;
         Ok(())
     }
+    async fn approve_pending_device(
+        &self,
+        member: &str,
+        credential: &[u8],
+        approver: &[u8],
+    ) -> Result<()> {
+        device_input(member, credential, &[])?;
+        device_input(member, approver, &[])?;
+        let mut tx = self.scope.tx().await?;
+        let changed = tx
+            .execute(
+                "UPDATE cmbr_device_pending SET approver = ?3 WHERE subject = ?1 AND credential = ?2",
+                params![member, credential, approver],
+            )
+            .await?;
+        if changed == 0 {
+            return Err(Error::Identity);
+        }
+        tx.commit().await?;
+        Ok(())
+    }
     async fn clear_pending_device(&self, member: &str, credential: &[u8]) -> Result<()> {
         device_input(member, credential, &[])?;
         let mut tx = self.scope.tx().await?;
@@ -473,7 +531,7 @@ impl Storage for LibsqlStorage {
     }
     async fn pending_devices(&self, member: &str) -> Result<Vec<PendingDeviceKey>> {
         crate::text(member)?;
-        let rows = self.scope.query("SELECT credential, signing_key, expires FROM cmbr_device_pending WHERE subject = ?1 ORDER BY credential LIMIT 1025", [member]).await?;
+        let rows = self.scope.query("SELECT credential, signing_key, expires, approver FROM cmbr_device_pending WHERE subject = ?1 ORDER BY credential LIMIT 1025", [member]).await?;
         if rows.len() > 1024 {
             return Err(Error::Unavailable);
         }
@@ -488,9 +546,15 @@ impl Storage for LibsqlStorage {
                 let crlt::Value::Integer(expires) = row.get_value(2)? else {
                     return Err(Error::Unavailable);
                 };
+                let approver = match row.get_value(3)? {
+                    crlt::Value::Blob(approver) => Some(approver.clone()),
+                    crlt::Value::Null => None,
+                    _ => return Err(Error::Unavailable),
+                };
                 let key: [u8; 32] = key.as_slice().try_into().map_err(|_| Error::Unavailable)?;
                 device_input(member, credential, &[key]).map_err(|_| Error::Unavailable)?;
                 Ok(PendingDeviceKey {
+                    approver,
                     credential: credential.clone(),
                     key,
                     expires: u64::try_from(*expires).map_err(|_| Error::Unavailable)?,

@@ -37,6 +37,19 @@ async fn contract(store: impl Storage) {
         let waiting = store.pending_devices("a").await.unwrap();
         assert_eq!((waiting.len(), waiting[0].expires), (1, 91));
         assert!(store.pending_devices("b").await.unwrap().is_empty());
+        assert_eq!(waiting[0].approver, None);
+        store
+            .approve_pending_device("a", b"two", b"one")
+            .await
+            .unwrap();
+        let approved = store.pending_devices("a").await.unwrap();
+        assert_eq!(approved[0].approver.as_deref(), Some(b"one".as_slice()));
+        assert!(
+            store
+                .approve_pending_device("a", b"gone", b"one")
+                .await
+                .is_err()
+        );
         store.clear_pending_device("a", b"two").await.unwrap();
         assert!(store.pending_devices("a").await.unwrap().is_empty());
     }
