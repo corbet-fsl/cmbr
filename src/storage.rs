@@ -40,8 +40,22 @@ pub const DEVICE_REGISTRY_SCHEMA: &str = "CREATE TABLE cvld_device_registry (
     member TEXT NOT NULL CHECK (length(member) BETWEEN 1 AND 64),
     device_key BLOB NOT NULL CHECK (length(device_key) = 32),
     state TEXT NOT NULL CHECK (state IN ('pending','active','revoked')),
+    initial_seed BLOB CHECK (initial_seed IS NULL OR length(initial_seed) = 32),
+    initial_publication BLOB CHECK (
+        initial_publication IS NULL OR (initial_seed IS NOT NULL AND length(initial_publication) = 32)
+    ),
     PRIMARY KEY (community_id, member, device_key)
 ) WITHOUT ROWID;";
+
+/// The opaque initial creation commitment held by a device-key member's first device key,
+/// and the one publication bound to it, if any. Never a root, signing or use capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceInitialCreation {
+    /// Commitment stored at join (nonzero).
+    pub seed: [u8; 32],
+    /// The immutable publication winner, once bound (nonzero).
+    pub publication: Option<[u8; 32]>,
+}
 
 /// State of one registered device key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,13 +218,24 @@ pub trait Storage: Send + Sync {
         &self,
         member: &str,
     ) -> impl Future<Output = Result<Vec<[u8; 32]>>> + Send;
-    /// Make `key` the member's first device key, ACTIVE. Returns false and changes nothing
-    /// when the member already has any registered key (another key, or this one in any state).
+    /// Make `key` the member's first device key, ACTIVE, holding the member's opaque initial
+    /// creation commitment `seed` (nonzero). Returns false and changes nothing when the member
+    /// already has any registered key (another key, or this one in any state).
     fn bind_first_device_key(
         &self,
         member: &str,
         key: [u8; 32],
+        seed: [u8; 32],
     ) -> impl Future<Output = Result<bool>> + Send;
+    /// The initial creation commitment and publication held by this member's ACTIVE device
+    /// key; `None` when the key holds none. With `bind = (seed, publication)` the publication
+    /// is set atomically first: an equal retry agrees, a different seed or winner refuses.
+    fn device_initial_creation(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        bind: Option<([u8; 32], [u8; 32])>,
+    ) -> impl Future<Output = Result<Option<DeviceInitialCreation>>> + Send;
 }
 pub(crate) fn device_input(member: &str, credential: &[u8], keys: &[[u8; 32]]) -> Result<()> {
     crate::text(member)?;
@@ -238,6 +263,37 @@ fn registry_input(member: &str, key: &[u8; 32]) -> Result<()> {
     let public = ed25519_dalek::VerifyingKey::from_bytes(key).map_err(|_| Error::InvalidInput)?;
     if public.is_weak() {
         return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn seed_input(seed: &[u8; 32]) -> Result<()> {
+    if *seed == [0; 32] {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+/// Apply one optional publication bind to a held commitment: an equal retry agrees, a
+/// different seed or an existing different winner refuses and changes nothing.
+fn bind_initial(
+    mut current: DeviceInitialCreation,
+    bind: Option<([u8; 32], [u8; 32])>,
+) -> Result<DeviceInitialCreation> {
+    if let Some((seed, publication)) = bind {
+        if current.seed != seed
+            || current
+                .publication
+                .is_some_and(|prior| prior != publication)
+        {
+            return Err(Error::Transition);
+        }
+        current.publication = Some(publication);
+    }
+    Ok(current)
+}
+fn bind_input(bind: &Option<([u8; 32], [u8; 32])>) -> Result<()> {
+    if let Some((seed, publication)) = bind {
+        seed_input(seed)?;
+        seed_input(publication)?;
     }
     Ok(())
 }
@@ -272,6 +328,7 @@ struct MemoryState {
     pending: BTreeMap<(String, Vec<u8>), PendingEntry>,
     revocations: BTreeMap<String, (u64, bool)>,
     registry: BTreeMap<String, BTreeMap<[u8; 32], DeviceKeyState>>,
+    initial: BTreeMap<(String, [u8; 32]), DeviceInitialCreation>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
 #[derive(Clone)]
@@ -481,7 +538,11 @@ impl Storage for MemoryStorage {
         }
         Ok(())
     }
-    async fn device_key_state(&self, member: &str, key: [u8; 32]) -> Result<Option<DeviceKeyState>> {
+    async fn device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> Result<Option<DeviceKeyState>> {
         registry_input(member, &key)?;
         let state = self.state.lock().await;
         Ok(state
@@ -504,15 +565,47 @@ impl Storage for MemoryStorage {
             })
             .unwrap_or_default())
     }
-    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+    async fn bind_first_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        seed: [u8; 32],
+    ) -> Result<bool> {
         registry_input(member, &key)?;
+        seed_input(&seed)?;
         let mut state = self.state.lock().await;
         let keys = state.registry.entry(member.to_owned()).or_default();
         if !keys.is_empty() {
             return Ok(false);
         }
         keys.insert(key, DeviceKeyState::Active);
+        state.initial.insert(
+            (member.to_owned(), key),
+            DeviceInitialCreation {
+                seed,
+                publication: None,
+            },
+        );
         Ok(true)
+    }
+    async fn device_initial_creation(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        bind: Option<([u8; 32], [u8; 32])>,
+    ) -> Result<Option<DeviceInitialCreation>> {
+        registry_input(member, &key)?;
+        bind_input(&bind)?;
+        let mut state = self.state.lock().await;
+        let active = state.registry.get(member).and_then(|keys| keys.get(&key))
+            == Some(&DeviceKeyState::Active);
+        let index = (member.to_owned(), key);
+        let Some(current) = state.initial.get(&index).copied().filter(|_| active) else {
+            return Ok(None);
+        };
+        let next = bind_initial(current, bind)?;
+        state.initial.insert(index, next);
+        Ok(Some(next))
     }
 }
 /// Persistent membership facts using the one service-owned crlt pool.
@@ -781,7 +874,11 @@ impl Storage for LibsqlStorage {
             .await?;
         Ok(())
     }
-    async fn device_key_state(&self, member: &str, key: [u8; 32]) -> Result<Option<DeviceKeyState>> {
+    async fn device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> Result<Option<DeviceKeyState>> {
         registry_input(member, &key)?;
         let rows = self
             .scope
@@ -790,7 +887,9 @@ impl Storage for LibsqlStorage {
                 params![member, key.to_vec()],
             )
             .await?;
-        rows.first().map(|row| registry_state(row.get_str(0)?)).transpose()
+        rows.first()
+            .map(|row| registry_state(row.get_str(0)?))
+            .transpose()
     }
     async fn active_device_keys(&self, member: &str) -> Result<Vec<[u8; 32]>> {
         crate::text(member)?;
@@ -803,13 +902,21 @@ impl Storage for LibsqlStorage {
             .await?;
         rows.iter()
             .map(|row| match row.get_value(0)? {
-                crlt::Value::Blob(bytes) => bytes.as_slice().try_into().map_err(|_| Error::Unavailable),
+                crlt::Value::Blob(bytes) => {
+                    bytes.as_slice().try_into().map_err(|_| Error::Unavailable)
+                }
                 _ => Err(Error::Unavailable),
             })
             .collect()
     }
-    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+    async fn bind_first_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        seed: [u8; 32],
+    ) -> Result<bool> {
         registry_input(member, &key)?;
+        seed_input(&seed)?;
         let mut tx = self.scope.tx().await?;
         let rows = tx
             .query(
@@ -822,12 +929,70 @@ impl Storage for LibsqlStorage {
             return Ok(false);
         }
         tx.execute(
-            "INSERT INTO cvld_device_registry (member, device_key, state) VALUES (?1, ?2, 'active')",
-            params![member, key.to_vec()],
+            "INSERT INTO cvld_device_registry (member, device_key, state, initial_seed) VALUES (?1, ?2, 'active', ?3)",
+            params![member, key.to_vec(), seed.to_vec()],
         )
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+    async fn device_initial_creation(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        bind: Option<([u8; 32], [u8; 32])>,
+    ) -> Result<Option<DeviceInitialCreation>> {
+        registry_input(member, &key)?;
+        bind_input(&bind)?;
+        let mut tx = self.scope.tx().await?;
+        let rows = tx
+            .query(
+                "SELECT initial_seed, initial_publication FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2 AND state = 'active' AND initial_seed IS NOT NULL",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        let current = DeviceInitialCreation {
+            seed: blob32(row.get_value(0)?)?,
+            publication: match row.get_value(1)? {
+                crlt::Value::Null => None,
+                value => Some(blob32(value)?),
+            },
+        };
+        if current.seed == [0; 32] || current.publication == Some([0; 32]) {
+            tx.rollback().await?;
+            return Err(Error::Unavailable);
+        }
+        let next = match bind_initial(current, bind) {
+            Ok(next) => next,
+            Err(error) => {
+                tx.rollback().await?;
+                return Err(error);
+            }
+        };
+        if next.publication != current.publication {
+            tx.execute(
+                "UPDATE cvld_device_registry SET initial_publication = ?3 WHERE member = ?1 AND device_key = ?2 AND initial_publication IS NULL",
+                params![
+                    member,
+                    key.to_vec(),
+                    next.publication.ok_or(Error::Unavailable)?.to_vec()
+                ],
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(Some(next))
+    }
+}
+
+fn blob32(value: &crlt::Value) -> Result<[u8; 32]> {
+    match value {
+        crlt::Value::Blob(bytes) => bytes.as_slice().try_into().map_err(|_| Error::Unavailable),
+        _ => Err(Error::Unavailable),
     }
 }
 

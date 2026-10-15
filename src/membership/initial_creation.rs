@@ -9,7 +9,8 @@ pub struct InitialCreationState {
     instance: Arc<()>,
     authentication: Authentication,
     subject: String,
-    state: ckyh::InitialCreationState,
+    seed: [u8; 32],
+    publication: Option<[u8; 32]>,
     timing: Timing,
     valid: bool,
     _guard: tokio::sync::OwnedMutexGuard<()>,
@@ -62,11 +63,11 @@ impl Timing {
 impl InitialCreationState {
     /// Only the opaque caller-domain commitment stored with original enrolment.
     pub fn seed(&self) -> [u8; 32] {
-        self.state.seed()
+        self.seed
     }
     /// The exact immutable winner, if binding has occurred. Never a capability.
     pub fn publication(&self) -> Option<[u8; 32]> {
-        self.state.publication()
+        self.publication
     }
     /// Latest trusted observation retained across leaf/host awaits.
     pub fn observed_at(&self) -> i64 {
@@ -133,7 +134,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let mut timing = Timing::new(self.now()?, expires_at, started)?;
         let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         timing.advance(self.now()?)?;
-        self.identity(auth).await?;
+        self.member_identity(auth).await?;
         timing.advance(self.now()?)?;
         let row = self.enrol.view(auth.member(), timing.observed).await?;
         self.check_record(&row)?;
@@ -147,22 +148,15 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         }
         self.unrestricted(row.subject()).await?;
         timing.advance(self.now()?)?;
-        let keys = self.passkeys.clone();
-        let authentication = auth.clone();
-        let state = blocking(move || match bind {
-            None => keys.initial_creation(&authentication),
-            Some((seed, publication)) => {
-                keys.bind_initial_publication(&authentication, seed, publication)
-            }
-        })
-        .await?;
+        let (seed, publication) = self.initial_commitment(auth, bind).await?;
         let completion = async {
             timing.advance(self.now()?)?;
             let mut result = InitialCreationState {
                 instance: self.instance.clone(),
                 authentication: auth.clone(),
                 subject: row.subject().to_owned(),
-                state,
+                seed,
+                publication,
                 timing,
                 valid: true,
                 _guard: guard,
@@ -193,7 +187,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Identity);
         }
         state.timing.advance(self.now()?)?;
-        self.identity(&state.authentication).await?;
+        self.member_identity(&state.authentication).await?;
         state.timing.advance(self.now()?)?;
         let row = self
             .enrol
@@ -210,16 +204,50 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         }
         self.unrestricted(row.subject()).await?;
         state.timing.advance(self.now()?)?;
-        let keys = self.passkeys.clone();
-        let auth = state.authentication.clone();
         // This LAST atomic read rechecks both exact current key and winner.
-        let current = blocking(move || keys.initial_creation(&auth)).await?;
+        let current = self.initial_commitment(&state.authentication, None).await?;
         state.timing.advance(self.now()?)?;
-        if current.seed() != state.seed() || current.publication() != state.publication() {
+        if current != (state.seed, state.publication) {
             return Err(Error::Busy);
         }
         state.valid = true;
         Ok(state.timing.observed)
+    }
+
+    /// The commitment of the authenticating credential, after an optional atomic bind: the
+    /// original passkey's ckyh record, or, for a device-key member, the first device key's
+    /// registry row (stored at the stamped join). Additional keys of either kind hold none.
+    async fn initial_commitment(
+        &self,
+        auth: &Authentication,
+        bind: Option<([u8; 32], [u8; 32])>,
+    ) -> Result<([u8; 32], Option<[u8; 32]>)> {
+        match auth.origin() {
+            ckyh::Origin::Passkey => {
+                let keys = self.passkeys.clone();
+                let authentication = auth.clone();
+                let state = blocking(move || match bind {
+                    None => keys.initial_creation(&authentication),
+                    Some((seed, publication)) => {
+                        keys.bind_initial_publication(&authentication, seed, publication)
+                    }
+                })
+                .await?;
+                Ok((state.seed(), state.publication()))
+            }
+            ckyh::Origin::DeviceKey => {
+                if auth.community() != self.storage.community() {
+                    return Err(Error::Identity);
+                }
+                let key = auth.device_key().ok_or(Error::Identity)?;
+                let held = self
+                    .storage
+                    .device_initial_creation(&auth.member().to_string(), key, bind)
+                    .await?
+                    .ok_or(Error::Passkey)?;
+                Ok((held.seed, held.publication))
+            }
+        }
     }
 }
 

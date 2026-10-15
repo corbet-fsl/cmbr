@@ -443,16 +443,19 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     /// JOIN by device key (one-confirmation model): the service has verified the passport
     /// presentation for `pseudonym` and a confirmation stamp covering exactly this key. Starts
     /// the membership, binds `key` as the member's first ACTIVE device key and records the
-    /// credential. A retry with the same key returns the same member; another key for an
-    /// existing member is refused (further devices are added by stamped pairing).
+    /// credential. The same stamp covers `seed`, the member's opaque initial creation
+    /// commitment, which the first key holds for `initial_creation` (as the original passkey
+    /// does). A retry with the same key and seed returns the same member; another key or seed
+    /// for an existing member is refused (further devices are added by stamped pairing).
     pub async fn join_with_device_key(
         &self,
         fresh: Uuid,
         pseudonym: &str,
         key: [u8; 32],
+        seed: [u8; 32],
     ) -> Result<Record> {
         crate::text(pseudonym)?;
-        if fresh.is_nil() {
+        if fresh.is_nil() || seed == [0; 32] {
             return Err(Error::InvalidInput);
         }
         self.unrestricted(pseudonym).await?;
@@ -467,9 +470,15 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Transition);
         }
         let member = user.to_string();
-        if !self.storage.bind_first_device_key(&member, key).await?
-            && self.storage.device_key_state(&member, key).await?
-                != Some(crate::DeviceKeyState::Active)
+        if !self
+            .storage
+            .bind_first_device_key(&member, key, seed)
+            .await?
+            && self
+                .storage
+                .device_initial_creation(&member, key, None)
+                .await?
+                .is_none_or(|held| held.seed != seed)
         {
             return Err(Error::Transition);
         }

@@ -102,8 +102,21 @@ impl Storage for PausedSignal {
     async fn active_device_keys(&self, member: &str) -> crate::Result<Vec<[u8; 32]>> {
         self.inner.active_device_keys(member).await
     }
-    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> crate::Result<bool> {
-        self.inner.bind_first_device_key(member, key).await
+    async fn bind_first_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        seed: [u8; 32],
+    ) -> crate::Result<bool> {
+        self.inner.bind_first_device_key(member, key, seed).await
+    }
+    async fn device_initial_creation(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        bind: Option<([u8; 32], [u8; 32])>,
+    ) -> crate::Result<Option<crate::DeviceInitialCreation>> {
+        self.inner.device_initial_creation(member, key, bind).await
     }
 }
 

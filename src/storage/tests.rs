@@ -469,3 +469,132 @@ async fn poisoned_member_registry_preserves_the_actual_existing_queue() {
     drop(resumed);
     registry.clear_poison();
 }
+
+fn device_key(seed: u8) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+        .verifying_key()
+        .to_bytes()
+}
+
+/// The first device key holds the join's creation commitment; one publication binds to it.
+async fn device_initial_contract(store: impl Storage) {
+    let (first, second) = (device_key(7), device_key(8));
+    let (seed, publication) = ([3; 32], [4; 32]);
+    assert_eq!(
+        store.bind_first_device_key("m", first, [0; 32]).await,
+        Err(Error::InvalidInput)
+    );
+    assert_eq!(
+        store.device_initial_creation("m", first, None).await,
+        Ok(None)
+    );
+    assert!(store.bind_first_device_key("m", first, seed).await.unwrap());
+    // Only the first key of a member binds; the held commitment is unchanged.
+    assert!(
+        !store
+            .bind_first_device_key("m", first, [5; 32])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .bind_first_device_key("m", second, seed)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.device_initial_creation("m", second, None).await,
+        Ok(None)
+    );
+    let held = DeviceInitialCreation {
+        seed,
+        publication: None,
+    };
+    assert_eq!(
+        store.device_initial_creation("m", first, None).await,
+        Ok(Some(held))
+    );
+    assert_eq!(
+        store
+            .device_initial_creation("m", first, Some((seed, [0; 32])))
+            .await,
+        Err(Error::InvalidInput)
+    );
+    assert_eq!(
+        store
+            .device_initial_creation("m", first, Some(([5; 32], publication)))
+            .await,
+        Err(Error::Transition)
+    );
+    let bound = DeviceInitialCreation {
+        seed,
+        publication: Some(publication),
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .device_initial_creation("m", first, Some((seed, publication)))
+                .await,
+            Ok(Some(bound))
+        );
+    }
+    assert_eq!(
+        store
+            .device_initial_creation("m", first, Some((seed, [6; 32])))
+            .await,
+        Err(Error::Transition)
+    );
+    assert_eq!(
+        store.device_initial_creation("m", first, None).await,
+        Ok(Some(bound))
+    );
+    // Another member's first key is independent.
+    assert!(
+        store
+            .bind_first_device_key("n", second, [9; 32])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.device_initial_creation("n", first, None).await,
+        Ok(None)
+    );
+}
+#[tokio::test]
+async fn memory_device_initial_creation_contract() {
+    device_initial_contract(MemoryStorage::new("test").unwrap()).await;
+}
+#[tokio::test]
+async fn libsql_device_initial_creation_contract_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", dir.path().join("registry.db").display());
+    let db = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    let history = [
+        crlt::Migration::new(1, "cmbr", SCHEMA),
+        crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+        crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
+        crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+    ];
+    db.migrate(&history).await.unwrap();
+    device_initial_contract(LibsqlStorage::new(&db, "test").unwrap()).await;
+    let reopened = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    reopened.migrate(&history).await.unwrap();
+    let store = LibsqlStorage::new(&reopened, "test").unwrap();
+    assert_eq!(
+        store
+            .device_initial_creation("m", device_key(7), None)
+            .await,
+        Ok(Some(DeviceInitialCreation {
+            seed: [3; 32],
+            publication: Some([4; 32]),
+        }))
+    );
+    // Community isolation: the same member name in another community holds nothing.
+    assert_eq!(
+        LibsqlStorage::new(&reopened, "other")
+            .unwrap()
+            .device_initial_creation("m", device_key(7), None)
+            .await,
+        Ok(None)
+    );
+}
