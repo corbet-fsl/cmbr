@@ -405,7 +405,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
 
     /// Resume the stable pseudonym binding after a committed ckyh authentication.
     pub async fn resume(&self, auth: &Authentication) -> Result<Record> {
-        self.authenticated(auth, self.now()?).await
+        self.authenticated_member(auth, self.now()?).await
     }
 
     /// Validate a candidate and check the actual register's reservation/lease state.
@@ -419,6 +419,74 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 .await?)
         }
         .await
+    }
+
+    /// Whether a device-key session of this member is still allowed: its key is ACTIVE in this
+    /// community's registry and the member is neither terminal nor restricted.
+    pub async fn device_session_is_active(&self, auth: &Authentication) -> Result<bool> {
+        if auth.origin() != ckyh::Origin::DeviceKey {
+            return Ok(false);
+        }
+        self.authenticated_member(auth, self.now()?).await?;
+        Ok(true)
+    }
+
+    /// The registered state of a member's device key in this community.
+    pub async fn device_key_state(
+        &self,
+        user: Uuid,
+        key: [u8; 32],
+    ) -> Result<Option<crate::DeviceKeyState>> {
+        self.storage.device_key_state(&user.to_string(), key).await
+    }
+
+    /// JOIN by device key (one-confirmation model): the service has verified the passport
+    /// presentation for `pseudonym` and a confirmation stamp covering exactly this key. Starts
+    /// the membership, binds `key` as the member's first ACTIVE device key and records the
+    /// credential. A retry with the same key returns the same member; another key for an
+    /// existing member is refused (further devices are added by stamped pairing).
+    pub async fn join_with_device_key(
+        &self,
+        fresh: Uuid,
+        pseudonym: &str,
+        key: [u8; 32],
+    ) -> Result<Record> {
+        crate::text(pseudonym)?;
+        if fresh.is_nil() {
+            return Err(Error::InvalidInput);
+        }
+        self.unrestricted(pseudonym).await?;
+        let user = match self.enrol_store.load_subject(pseudonym).await? {
+            Some(existing) => existing.user(),
+            None => fresh,
+        };
+        let _guard = crate::storage::member_lock(self.storage.community(), user).await;
+        let now = self.now()?;
+        let row = self.enrol.start(user, pseudonym, now).await?;
+        if row.state().is_terminal() || !self.credentials(user).await?.is_empty() {
+            return Err(Error::Transition);
+        }
+        let member = user.to_string();
+        if !self.storage.bind_first_device_key(&member, key).await?
+            && self.storage.device_key_state(&member, key).await?
+                != Some(crate::DeviceKeyState::Active)
+        {
+            return Err(Error::Transition);
+        }
+        if row.state() == State::Started {
+            return Ok(self
+                .enrol
+                .apply(
+                    &row,
+                    Event::DeviceKeyBound {
+                        community: self.storage.community(),
+                        member: user,
+                    },
+                    now,
+                )
+                .await?);
+        }
+        Ok(row)
     }
 
     /// Revalidate a session's exact credential, including immediate revocation.
@@ -454,7 +522,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         completing(async move {
             let _guard = guard;
             let now = m.now()?;
-            let row = m.authenticated(&auth, now).await?;
+            let row = m.authenticated_member(&auth, now).await?;
             if !matches!(
                 row.state(),
                 State::PasskeyRegistered | State::HandleReserved | State::GatesInProgress
@@ -488,7 +556,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         gates: &cgts::CheckedGates,
     ) -> Result<Lobby> {
         let now = self.now()?;
-        let row = self.authenticated(auth, now).await?;
+        let row = self.authenticated_member(auth, now).await?;
         if snapshot.settings().community != self.storage.community() {
             return Err(Error::Identity);
         }
@@ -536,7 +604,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     ) -> Result<Pin> {
         let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         async {
-            let row = self.authenticated(auth, self.now()?).await?;
+            let row = self.authenticated_member(auth, self.now()?).await?;
             let fingerprint =
                 fingerprint.checked(self.storage.community(), row.subject(), field)?;
             Ok(self.pins.pin(row.subject(), field, fingerprint).await?)
@@ -584,7 +652,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     /// Read the current fingerprint and revision, without access history.
     pub async fn get_pin(&self, auth: &Authentication, field: &str) -> Result<Option<Pin>> {
         async {
-            let row = self.authenticated(auth, self.now()?).await?;
+            let row = self.authenticated_member(auth, self.now()?).await?;
             Ok(self.pins.get(row.subject(), field).await?)
         }
         .await
@@ -594,7 +662,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     /// The outer service must validate the coarse lease before granting access.
     pub async fn member(&self, auth: &Authentication) -> Result<Option<crgs::Member>> {
         async {
-            let row = self.authenticated(auth, self.now()?).await?;
+            let row = self.authenticated_member(auth, self.now()?).await?;
             Ok(self.register.member(&row.member_id()).await?)
         }
         .await
@@ -603,7 +671,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     /// Return the canonical reserved or admitted handle for the lobby.
     pub async fn handle(&self, auth: &Authentication) -> Result<Option<crgs::Handle>> {
         async {
-            let row = self.authenticated(auth, self.now()?).await?;
+            let row = self.authenticated_member(auth, self.now()?).await?;
             self.current_handle(&row).await
         }
         .await
@@ -777,13 +845,17 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     /// passkey contributes no key even if its historical binding remains in storage.
     pub async fn current_device_keys(&self, auth: &Authentication) -> Result<Vec<[u8; 32]>> {
         let _guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
-        let row = self.authenticated(auth, self.now()?).await?;
+        let row = self.authenticated_member(auth, self.now()?).await?;
         self.live_device_keys(&row).await
     }
 
     async fn live_device_keys(&self, row: &Record) -> Result<Vec<[u8; 32]>> {
         let credentials = self.credentials(row.user()).await?;
         let bindings = self.storage.device_keys(row.subject()).await?;
+        let registered = self
+            .storage
+            .active_device_keys(&row.user().to_string())
+            .await?;
         Ok(bindings
             .into_iter()
             .filter(|binding| {
@@ -793,6 +865,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 })
             })
             .map(|binding| binding.key)
+            .chain(registered)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect())
@@ -900,7 +973,13 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         date(now)?;
         Ok(now)
     }
+    /// Passkey-only identity: the human-confirmation actions (device approval and revocation,
+    /// lineage changes, step-ups). A device-key authentication is refused here until the
+    /// confirmation stamp (package 5) exists.
     async fn identity(&self, auth: &Authentication) -> Result<()> {
+        if auth.origin() != ckyh::Origin::Passkey {
+            return Err(Error::Passkey);
+        }
         if auth.community() != self.storage.community() {
             Err(Error::Identity)
         } else if !self
@@ -912,6 +991,27 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             Err(Error::Passkey)
         } else {
             Ok(())
+        }
+    }
+    /// Member-level identity: any origin. A passkey is rechecked against its stored revocation
+    /// state; a device key is checked for community only, because its registry state lives with
+    /// the community service, which rechecks it on every request.
+    async fn member_identity(&self, auth: &Authentication) -> Result<()> {
+        match auth.origin() {
+            ckyh::Origin::Passkey => self.identity(auth).await,
+            ckyh::Origin::DeviceKey => {
+                let key = auth.device_key().ok_or(Error::Identity)?;
+                if auth.community() != self.storage.community()
+                    || self
+                        .storage
+                        .device_key_state(&auth.member().to_string(), key)
+                        .await?
+                        != Some(crate::DeviceKeyState::Active)
+                {
+                    return Err(Error::Identity);
+                }
+                Ok(())
+            }
         }
     }
     fn check_record(&self, row: &Record) -> Result<()> {
@@ -944,6 +1044,13 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     }
     async fn authenticated(&self, auth: &Authentication, now: i64) -> Result<Record> {
         self.identity(auth).await?;
+        self.live_record(auth, now).await
+    }
+    async fn authenticated_member(&self, auth: &Authentication, now: i64) -> Result<Record> {
+        self.member_identity(auth).await?;
+        self.live_record(auth, now).await
+    }
+    async fn live_record(&self, auth: &Authentication, now: i64) -> Result<Record> {
         let row = self.enrol.view(auth.member(), now).await?;
         self.check_record(&row)?;
         self.unrestricted(row.subject()).await?;
@@ -966,14 +1073,31 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Ok(row);
         }
         let credentials = self.credentials(user).await?;
+        let device_keys = !self
+            .storage
+            .active_device_keys(&user.to_string())
+            .await?
+            .is_empty();
         if row.state() == State::Started {
             if let Some(key) = credentials.iter().find(|key| !key.is_revoked()) {
                 row = self
                     .enrol
                     .apply(&row, Event::PasskeyRegistered(key), now)
                     .await?;
+            } else if device_keys {
+                row = self
+                    .enrol
+                    .apply(
+                        &row,
+                        Event::DeviceKeyBound {
+                            community: self.storage.community(),
+                            member: user,
+                        },
+                        now,
+                    )
+                    .await?;
             }
-        } else if !credentials.iter().any(|key| !key.is_revoked()) {
+        } else if !device_keys && !credentials.iter().any(|key| !key.is_revoked()) {
             self.storage.signal_revocation(row.subject()).await?;
             return Ok(self.enrol.apply(&row, Event::AllPasskeysLost, now).await?);
         }
@@ -1013,6 +1137,11 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 .await?
                 .iter()
                 .any(|key| !key.is_revoked())
+            || !self
+                .storage
+                .active_device_keys(&row.user().to_string())
+                .await?
+                .is_empty()
         {
             return Ok(row);
         }

@@ -32,6 +32,28 @@ pub const DEVICE_KEYS_SCHEMA: &str = "CREATE TABLE cmbr_device_keys (
     PRIMARY KEY (community_id, subject, credential, signing_key)
 ) WITHOUT ROWID;";
 
+/// Per-community registry of a member's device keys (pending, active, revoked): the credential
+/// of the one-confirmation model. Appended after `DEVICE_PENDING_SCHEMA`; the table name is the
+/// one of its first migration and stays.
+pub const DEVICE_REGISTRY_SCHEMA: &str = "CREATE TABLE cvld_device_registry (
+    community_id TEXT NOT NULL,
+    member TEXT NOT NULL CHECK (length(member) BETWEEN 1 AND 64),
+    device_key BLOB NOT NULL CHECK (length(device_key) = 32),
+    state TEXT NOT NULL CHECK (state IN ('pending','active','revoked')),
+    PRIMARY KEY (community_id, member, device_key)
+) WITHOUT ROWID;";
+
+/// State of one registered device key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKeyState {
+    /// Announced, grants nothing yet.
+    Pending,
+    /// Opens sessions and counts as a live credential.
+    Active,
+    /// Permanently withdrawn.
+    Revoked,
+}
+
 /// Append after `DEVICE_KEYS_SCHEMA`. One pending device key per passkey, granting nothing
 /// until confirmed and dropped once `expires` has passed.
 pub const DEVICE_PENDING_SCHEMA: &str = "CREATE TABLE cmbr_device_pending (
@@ -171,6 +193,24 @@ pub trait Storage: Send + Sync {
     fn revocations(&self, limit: usize) -> impl Future<Output = Result<Vec<Revocation>>> + Send;
     /// Clear only after cplc durably advanced its epoch and published fresh trust.
     fn acknowledge(&self, event: &Revocation) -> impl Future<Output = Result<()>> + Send;
+    /// The registered state of this member's device key; `None` when unknown.
+    fn device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> impl Future<Output = Result<Option<DeviceKeyState>>> + Send;
+    /// Every ACTIVE device key of this member, in key order.
+    fn active_device_keys(
+        &self,
+        member: &str,
+    ) -> impl Future<Output = Result<Vec<[u8; 32]>>> + Send;
+    /// Make `key` the member's first device key, ACTIVE. Returns false and changes nothing
+    /// when the member already has any registered key (another key, or this one in any state).
+    fn bind_first_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> impl Future<Output = Result<bool>> + Send;
 }
 pub(crate) fn device_input(member: &str, credential: &[u8], keys: &[[u8; 32]]) -> Result<()> {
     crate::text(member)?;
@@ -189,6 +229,25 @@ pub(crate) fn device_input(member: &str, credential: &[u8], keys: &[[u8; 32]]) -
         }
     }
     Ok(())
+}
+fn registry_input(member: &str, key: &[u8; 32]) -> Result<()> {
+    crate::text(member)?;
+    if member.len() > 64 {
+        return Err(Error::InvalidInput);
+    }
+    let public = ed25519_dalek::VerifyingKey::from_bytes(key).map_err(|_| Error::InvalidInput)?;
+    if public.is_weak() {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn registry_state(text: &str) -> Result<DeviceKeyState> {
+    match text {
+        "pending" => Ok(DeviceKeyState::Pending),
+        "active" => Ok(DeviceKeyState::Active),
+        "revoked" => Ok(DeviceKeyState::Revoked),
+        _ => Err(Error::Unavailable),
+    }
 }
 fn deadline(until: u64) -> Result<()> {
     if until > i64::MAX as u64 || !until.is_multiple_of(86400) {
@@ -212,6 +271,7 @@ struct MemoryState {
     devices: BTreeMap<(String, Vec<u8>), BTreeSet<[u8; 32]>>,
     pending: BTreeMap<(String, Vec<u8>), PendingEntry>,
     revocations: BTreeMap<String, (u64, bool)>,
+    registry: BTreeMap<String, BTreeMap<[u8; 32], DeviceKeyState>>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
 #[derive(Clone)]
@@ -420,6 +480,39 @@ impl Storage for MemoryStorage {
             value.1 = false;
         }
         Ok(())
+    }
+    async fn device_key_state(&self, member: &str, key: [u8; 32]) -> Result<Option<DeviceKeyState>> {
+        registry_input(member, &key)?;
+        let state = self.state.lock().await;
+        Ok(state
+            .registry
+            .get(member)
+            .and_then(|keys| keys.get(&key))
+            .copied())
+    }
+    async fn active_device_keys(&self, member: &str) -> Result<Vec<[u8; 32]>> {
+        crate::text(member)?;
+        let state = self.state.lock().await;
+        Ok(state
+            .registry
+            .get(member)
+            .map(|keys| {
+                keys.iter()
+                    .filter(|(_, state)| **state == DeviceKeyState::Active)
+                    .map(|(key, _)| *key)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut state = self.state.lock().await;
+        let keys = state.registry.entry(member.to_owned()).or_default();
+        if !keys.is_empty() {
+            return Ok(false);
+        }
+        keys.insert(key, DeviceKeyState::Active);
+        Ok(true)
     }
 }
 /// Persistent membership facts using the one service-owned crlt pool.
@@ -687,6 +780,54 @@ impl Storage for LibsqlStorage {
             )
             .await?;
         Ok(())
+    }
+    async fn device_key_state(&self, member: &str, key: [u8; 32]) -> Result<Option<DeviceKeyState>> {
+        registry_input(member, &key)?;
+        let rows = self
+            .scope
+            .query(
+                "SELECT state FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        rows.first().map(|row| registry_state(row.get_str(0)?)).transpose()
+    }
+    async fn active_device_keys(&self, member: &str) -> Result<Vec<[u8; 32]>> {
+        crate::text(member)?;
+        let rows = self
+            .scope
+            .query(
+                "SELECT device_key FROM cvld_device_registry WHERE member = ?1 AND state = 'active' ORDER BY device_key",
+                params![member],
+            )
+            .await?;
+        rows.iter()
+            .map(|row| match row.get_value(0)? {
+                crlt::Value::Blob(bytes) => bytes.as_slice().try_into().map_err(|_| Error::Unavailable),
+                _ => Err(Error::Unavailable),
+            })
+            .collect()
+    }
+    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut tx = self.scope.tx().await?;
+        let rows = tx
+            .query(
+                "SELECT 1 FROM cvld_device_registry WHERE member = ?1 LIMIT 1",
+                params![member],
+            )
+            .await?;
+        if !rows.is_empty() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO cvld_device_registry (member, device_key, state) VALUES (?1, ?2, 'active')",
+            params![member, key.to_vec()],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
     }
 }
 

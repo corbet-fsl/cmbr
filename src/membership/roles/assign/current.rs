@@ -57,7 +57,7 @@ impl<'a, S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'st
     async fn current(&mut self, before: &crgs::Member, requested: crgs::Role) -> Result<()> {
         self.cut = None;
         let begun = self.observe(self.window.floor)?;
-        let actor_row = self.owner.authenticated(self.auth, begun as i64).await?;
+        let actor_row = self.owner.authenticated_member(self.auth, begun as i64).await?;
         let actor = self
             .owner
             .active_register_member(&actor_row, begun as i64)

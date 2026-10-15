@@ -93,6 +93,7 @@ async fn libsql_coarse_facts_are_indexed_isolated_and_persistent() {
         crlt::Migration::new(1, "cmbr", SCHEMA),
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
         crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
+        crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
     ];
     db.migrate(&history).await.unwrap();
     contract(LibsqlStorage::new(&db, "test").unwrap()).await;
@@ -276,6 +277,7 @@ async fn libsql_rejects_real_dynamic_type_corruption_and_keeps_atomic_outbox() {
         crlt::Migration::new(1, "cmbr", SCHEMA),
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
         crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
+        crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
     ])
     .await
     .unwrap();

@@ -90,7 +90,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             session.check(auth, begun_at)?;
         }
         let mut observed = begun_at;
-        self.identity(auth).await?;
+        self.member_identity(auth).await?;
         observed = self.role_time(observed, valid_until)?;
         let row = self
             .enrol_store
@@ -147,7 +147,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 session.check(&authentication, observed)?;
             }
             let actor_row = owner
-                .authenticated(&authentication, observed as i64)
+                .authenticated_member(&authentication, observed as i64)
                 .await?;
             observed = owner.role_time(observed, until)?;
             let actor_member = owner
@@ -176,7 +176,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 .min(lease_deadline(target_member.lease_end)?);
             let lifetime =
                 Duration::from_secs(deadline.checked_sub(begun_at).ok_or(Error::Transition)?);
-            owner.identity(&authentication).await?;
+            owner.member_identity(&authentication).await?;
             observed = owner.role_time(observed, deadline)?;
             owner.unrestricted(actor_row.subject()).await?;
             observed = owner.role_time(observed, deadline)?;
@@ -208,7 +208,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             let completed = async {
                 observed = owner.role_time(observed, deadline)?;
                 guard.check_session(observed)?;
-                owner.identity(&authentication).await?;
+                owner.member_identity(&authentication).await?;
                 observed = owner.role_time(observed, deadline)?;
                 owner.unrestricted(actor_row.subject()).await?;
                 observed = owner.role_time(observed, deadline)?;

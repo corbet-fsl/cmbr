@@ -18,7 +18,7 @@ pub use membership::{
 };
 pub use storage::creation::CREATION_SCHEMA;
 pub use storage::{
-    DEVICE_KEYS_SCHEMA, DEVICE_PENDING_SCHEMA, DeviceKeyBinding, LibsqlStorage, MemoryStorage,
+    DEVICE_KEYS_SCHEMA, DEVICE_PENDING_SCHEMA, DEVICE_REGISTRY_SCHEMA, DeviceKeyBinding, DeviceKeyState, LibsqlStorage, MemoryStorage,
     PendingDeviceKey, Revocation, SCHEMA, Storage,
 };
 // Export protocol values only; callers cannot reach leaf writers through cmbr.

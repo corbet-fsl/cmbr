@@ -92,6 +92,19 @@ impl Storage for PausedSignal {
     async fn acknowledge(&self, event: &crate::Revocation) -> crate::Result<()> {
         self.inner.acknowledge(event).await
     }
+    async fn device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> crate::Result<Option<crate::DeviceKeyState>> {
+        self.inner.device_key_state(member, key).await
+    }
+    async fn active_device_keys(&self, member: &str) -> crate::Result<Vec<[u8; 32]>> {
+        self.inner.active_device_keys(member).await
+    }
+    async fn bind_first_device_key(&self, member: &str, key: [u8; 32]) -> crate::Result<bool> {
+        self.inner.bind_first_device_key(member, key).await
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

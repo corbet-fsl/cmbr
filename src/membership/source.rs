@@ -59,7 +59,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         };
         current()?;
         let row = self
-            .authenticated(
+            .authenticated_member(
                 auth,
                 i64::try_from(observed).map_err(|_| Error::InvalidInput)?,
             )
@@ -111,7 +111,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         current()?;
         let authorized_devices = self.live_device_keys(&row).await?;
         current()?;
-        self.identity(auth).await?;
+        self.member_identity(auth).await?;
         current()?;
         self.unrestricted(row.subject()).await?;
         current()?;

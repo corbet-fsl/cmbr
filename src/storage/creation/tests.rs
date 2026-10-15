@@ -44,6 +44,11 @@ async fn open(path: &std::path::Path) -> crlt::Db {
         "cmbr-device-pending",
         crate::DEVICE_PENDING_SCHEMA,
     ));
+    history.push(crlt::Migration::new(
+        history.len() as u32 + 1,
+        "device-registry",
+        crate::DEVICE_REGISTRY_SCHEMA,
+    ));
     db.migrate(&history).await.unwrap();
     db
 }

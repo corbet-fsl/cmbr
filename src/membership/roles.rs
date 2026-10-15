@@ -78,7 +78,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let begun_at = self.role_time(0, until)?;
         let guard = crate::storage::member_lock(self.storage.community(), auth.member()).await;
         let mut observed = self.role_time(begun_at, until)?;
-        let row = self.authenticated(auth, observed as i64).await?;
+        let row = self.authenticated_member(auth, observed as i64).await?;
         observed = self.role_time(observed, until)?;
         let member = self.active_register_member(&row, observed as i64).await?;
         observed = self.role_time(observed, until)?;
@@ -121,7 +121,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Transition);
         }
         let row = self
-            .authenticated(&lease.authentication, observed as i64)
+            .authenticated_member(&lease.authentication, observed as i64)
             .await?;
         observed = self.role_time(observed, lease.valid_until)?;
         let member = self.active_register_member(&row, observed as i64).await?;
@@ -132,7 +132,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         {
             return Err(Error::Transition);
         }
-        self.identity(&lease.authentication).await?;
+        self.member_identity(&lease.authentication).await?;
         observed = self.role_time(observed, lease.valid_until)?;
         self.unrestricted(row.subject()).await?;
         observed = self.role_time(observed, lease.valid_until)?;
