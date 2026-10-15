@@ -184,7 +184,11 @@ async fn cancelled_real_writer_wait_never_spends_or_admits_and_allows_exact_retr
     );
     poll_fn(|context| match operation.as_mut().poll(context) {
         Poll::Pending => Poll::Ready(()),
-        Poll::Ready(_) => panic!("the actual competing writer must prevent admission"),
+        // A local SQLite file waits for the competing writer inside the first poll (busy timeout of the fixture), so
+        // the wait ends either still pending (cancelled by the drop below) or as the busy refusal; what must never
+        // happen is an admission. Which one occurs depends on scheduling, so both are accepted.
+        Poll::Ready(Err(crate::Error::Unavailable)) => Poll::Ready(()),
+        Poll::Ready(other) => panic!("the actual competing writer must prevent admission: {other:?}"),
     })
     .await;
     drop(operation);
