@@ -1100,7 +1100,13 @@ mod cancelled_revocation;
 async fn an_applied_device_join_is_reconfirmed_read_only_and_only_for_its_key_and_seed() {
     let (_dir, db) = temporary().await;
     let m = facade(&db, "a", Clock::new());
-    let (key, seed) = ([7; 32], [9; 32]);
+    // Device keys are real Ed25519 public keys: the registry refuses anything else.
+    let device = |byte: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[byte; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let (key, seed) = (device(7), [9; 32]);
     // Never joined: nothing to reconfirm, and nothing is created.
     assert!(
         m.device_join_applied(SUBJECT, key, seed)
@@ -1124,7 +1130,7 @@ async fn an_applied_device_join_is_reconfirmed_read_only_and_only_for_its_key_an
     assert_eq!(before, m.enrol_store.load(USER).await.unwrap());
     // Another key, another seed or another pseudonym is not this join.
     assert!(
-        m.device_join_applied(SUBJECT, [8; 32], seed)
+        m.device_join_applied(SUBJECT, device(8), seed)
             .await
             .unwrap()
             .is_none()
