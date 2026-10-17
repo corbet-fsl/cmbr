@@ -117,6 +117,32 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(CommunityPhase::LegacyActive)
     }
 
+    /// Whether this authenticated member is the recorded creator of a community
+    /// that is still being created. It decides only whether the creator's verified
+    /// global passport may stand in for the voucher step (L1352); first-admin
+    /// admission still matches the exact commitment in its own writer.
+    pub async fn is_recorded_creator(&self, auth: &Authentication) -> Result<bool> {
+        let row = self.authenticated_member(auth, self.now()?).await?;
+        self.recorded_creator(&row).await
+    }
+
+    pub(super) async fn recorded_creator(&self, row: &Record) -> Result<bool> {
+        let tx = self.authority_scope.tx().await?;
+        let (tx, phase) = self.creation().read(tx).await?;
+        tx.rollback().await?;
+        Ok(match phase {
+            Some(Phase::Creating(current)) => {
+                let receipt = current.receipt();
+                Pending::new(
+                    receipt,
+                    &cvch::member_binding(receipt, row.member_id().as_bytes()),
+                    current.expires(),
+                )? == current
+            }
+            _ => false,
+        })
+    }
+
     fn creation(&self) -> Creation {
         Creation::new(self.authority_scope.clone())
     }
@@ -146,6 +172,37 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         }
         Ok(())
     }
+}
+
+/// The gate a founder's verified global passport stands in for.
+const FOUNDER_VOUCHER_GATE: &str = "cvch";
+
+/// Lobby decision for the recorded creator of a new community (Julian, L1352):
+/// a founder is not gated by the new community's voucher gate, because her
+/// verified global passport, presented at admission, proves she was admitted
+/// somewhere on the platform (cgts `FoundingVoucher`). Exactly the community-level voucher requirement that lacks a
+/// proof counts as passed, once per group (a group never lists one gate and
+/// level twice). A disabled voucher gate stays missing, and every other
+/// requirement, the legal veto included, is untouched.
+pub(super) fn founder_decision(mut decision: crbk::Decision) -> crbk::Decision {
+    decision.missing.retain_mut(|missing| match missing {
+        crbk::Missing::Gates {
+            needed,
+            alternatives,
+        } => {
+            let before = alternatives.len();
+            alternatives.retain(|alternative| {
+                alternative.requirement.gate != FOUNDER_VOUCHER_GATE
+                    || alternative.requirement.level != crbk::GateLevel::Community
+                    || alternative.reason != crbk::GateFailure::ProofRequired
+            });
+            *needed = needed.saturating_sub(before - alternatives.len());
+            *needed > 0
+        }
+        _ => true,
+    });
+    decision.allowed = decision.missing.is_empty();
+    decision
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ mod initial_creation;
 pub use initial_creation::InitialCreationState;
 mod clock;
 mod creation;
+use creation::founder_decision;
 pub use creation::{AdmissionRequest, CommunityPhase};
 mod pin_change;
 mod roles;
@@ -619,6 +620,13 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             )
             .await
             .map_err(|_| Error::Policy)?;
+        // The recorded creator presents her global passport at admission in place
+        // of the voucher step; the lobby does not ask her for a voucher.
+        let decision = if self.recorded_creator(&row).await? {
+            founder_decision(decision)
+        } else {
+            decision
+        };
         let one_passkey = self
             .credentials(row.user())
             .await?
