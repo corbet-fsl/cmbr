@@ -498,6 +498,43 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(row)
     }
 
+    /// The ALREADY APPLIED join by device key of `pseudonym`: its member holds `key` as an
+    /// ACTIVE device key whose initial creation commitment is `seed`, and is neither terminal
+    /// nor restricted. Read only, no state change. The service answers a retried join with it
+    /// once the join's stamp has expired, so a device interrupted after its join was applied
+    /// never needs a second confirmation. `None` when this exact join was never applied.
+    pub async fn device_join_applied(
+        &self,
+        pseudonym: &str,
+        key: [u8; 32],
+        seed: [u8; 32],
+    ) -> Result<Option<Record>> {
+        crate::text(pseudonym)?;
+        if seed == [0; 32] {
+            return Err(Error::InvalidInput);
+        }
+        self.unrestricted(pseudonym).await?;
+        let Some(existing) = self.enrol_store.load_subject(pseudonym).await? else {
+            return Ok(None);
+        };
+        let user = existing.user();
+        let member = user.to_string();
+        if self.storage.device_key_state(&member, key).await? != Some(crate::DeviceKeyState::Active)
+            || self
+                .storage
+                .device_initial_creation(&member, key, None)
+                .await?
+                .is_none_or(|held| held.seed != seed)
+        {
+            return Ok(None);
+        }
+        let row = self.enrol.view(user, self.now()?).await?;
+        if row.state().is_terminal() {
+            return Err(Error::Transition);
+        }
+        Ok(Some(row))
+    }
+
     /// Revalidate a session's exact credential, including immediate revocation.
     /// An opaque ckyh authentication alone is not a renewable bearer capability.
     pub async fn session_is_active(

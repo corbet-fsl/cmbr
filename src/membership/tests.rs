@@ -1095,3 +1095,54 @@ async fn a_member_whose_lease_ended_cannot_return_with_a_fresh_policy() {
     );
 }
 mod cancelled_revocation;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_applied_device_join_is_reconfirmed_read_only_and_only_for_its_key_and_seed() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "a", Clock::new());
+    let (key, seed) = ([7; 32], [9; 32]);
+    // Never joined: nothing to reconfirm, and nothing is created.
+    assert!(
+        m.device_join_applied(SUBJECT, key, seed)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(m.enrol_store.load_subject(SUBJECT).await.unwrap().is_none());
+    let joined = m
+        .join_with_device_key(USER, SUBJECT, key, seed)
+        .await
+        .unwrap();
+    let before = m.enrol_store.load(USER).await.unwrap();
+    // The same key and seed: the same member, without any write.
+    let again = m
+        .device_join_applied(SUBJECT, key, seed)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.user(), joined.user());
+    assert_eq!(before, m.enrol_store.load(USER).await.unwrap());
+    // Another key, another seed or another pseudonym is not this join.
+    assert!(
+        m.device_join_applied(SUBJECT, [8; 32], seed)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        m.device_join_applied(SUBJECT, key, [10; 32])
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        m.device_join_applied("second-subject", key, seed)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        m.device_join_applied(SUBJECT, key, [0; 32]).await,
+        Err(Error::InvalidInput)
+    ));
+}
