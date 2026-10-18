@@ -362,3 +362,42 @@ async fn a_passkey_member_without_a_live_passkey_is_still_no_source() {
             .is_err()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_crossing_a_second_boundary_reads_its_start_instant() {
+    let (_directory, db) = common::temporary().await;
+    let clock = common::Clock::new();
+    let owner = common::facade(&db, "a", clock.clone());
+    let key = device(7);
+    let auth = device_joined(&owner, key).await;
+    admit(&owner, &auth).await.unwrap();
+    // The request captured `start`; its source read runs after the clock has
+    // ticked into the next second. The read is evaluated at `start` and
+    // returns the same facts as a read inside that second.
+    let start = common::now();
+    let (inside, lease) = owner
+        .membership(common::SUBJECT, start as u64)
+        .await
+        .unwrap();
+    drop(lease);
+    // An instant the clock has not reached yet is never accepted.
+    assert!(matches!(
+        owner.membership(common::SUBJECT, (start + 1) as u64).await,
+        Err(cplc::Error::Invalid(_))
+    ));
+    clock.set(start + 1);
+    let (crossed, mut lease) = owner
+        .membership(common::SUBJECT, start as u64)
+        .await
+        .unwrap();
+    assert_eq!(lease.checked_at, start as u64);
+    assert_eq!(crossed.state, inside.state);
+    assert_eq!(crossed.lease_end, inside.lease_end);
+    assert_eq!(crossed.probation_until, inside.probation_until);
+    assert_eq!(crossed.authorized_devices, vec![key]);
+    // The retained lease is still rechecked against the live commit sample.
+    owner
+        .check_source(&mut lease, &auth, ACCOUNT, (start + 1) as u64)
+        .await
+        .unwrap();
+}

@@ -145,7 +145,12 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let read: Result<_> = async {
             let started = Instant::now();
             let now_i64 = i64::try_from(now).map_err(|_| Error::InvalidInput)?;
-            if self.now()? != now_i64 {
+            // `now` is the one instant the caller's request captured at its start;
+            // every time-dependent fact below is evaluated against it, so a
+            // request whose processing crosses a second boundary reads the same
+            // facts as one that does not. Only a `now` the clock has not reached
+            // yet is refused.
+            if now_i64 > self.now()? {
                 return Err(Error::InvalidInput);
             }
             let row = self
