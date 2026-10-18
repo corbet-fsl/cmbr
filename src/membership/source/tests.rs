@@ -227,3 +227,138 @@ async fn cancellation_while_real_pool_read_waits_cannot_revive_original_lease() 
             .is_ok()
     );
 }
+
+/// A real Ed25519 public key: the device registry refuses anything else.
+fn device(byte: u8) -> [u8; 32] {
+    SigningKey::from_bytes(&[byte; 32]).verifying_key().to_bytes()
+}
+
+/// JOIN by device key (no community passkey) and the session that key signs in with.
+async fn device_joined(owner: &common::Facade, key: [u8; 32]) -> Authentication {
+    let joined = owner
+        .join_with_device_key(common::USER, common::SUBJECT, key, [9; 32])
+        .await
+        .unwrap();
+    let auth = Authentication::from_device_key("a".into(), joined.user(), key);
+    owner
+        .reserve_handle(&auth, common::HANDLE, &[])
+        .await
+        .unwrap();
+    auth
+}
+
+async fn admit(owner: &common::Facade, auth: &Authentication) -> Result<cnrl::Record> {
+    owner
+        .admit_test(
+            auth,
+            &common::policy("a"),
+            &[common::test_gate("a", common::SUBJECT)],
+            common::lease(),
+        )
+        .await
+}
+
+async fn set_registry_state(db: &crlt::Db, key: [u8; 32], state: &str) {
+    db.community("a")
+        .unwrap()
+        .execute(
+            "UPDATE cvld_device_registry SET state = ?1 WHERE device_key = ?2",
+            crlt::params![state, key.to_vec()],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_key_member_is_admitted_and_is_a_credential_source() {
+    let (_directory, db) = common::temporary().await;
+    let owner = common::facade(&db, "a", common::Clock::new());
+    let key = device(7);
+    let auth = device_joined(&owner, key).await;
+    let admitted = admit(&owner, &auth).await.unwrap();
+    assert_eq!(admitted.state(), State::Admitted);
+    // No community passkey: the active device key alone makes her a credential source.
+    assert!(owner.credentials(common::USER).await.unwrap().is_empty());
+    let (source, mut lease) = owner
+        .membership(common::SUBJECT, common::now() as u64)
+        .await
+        .unwrap();
+    assert_eq!(source.state, crbk::MembershipState::Admitted);
+    assert_eq!(source.authorized_devices, vec![key]);
+    // Revoking the key in the registry ends the retained source and every new one.
+    set_registry_state(&db, key, "revoked").await;
+    assert!(
+        owner
+            .check_source(&mut lease, &auth, ACCOUNT, common::now() as u64)
+            .await
+            .is_err()
+    );
+    assert!(!lease.valid);
+    // The lease holds the member lock; release it before asking again.
+    drop(lease);
+    assert!(
+        owner
+            .membership(common::SUBJECT, common::now() as u64)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revoked_inactive_or_foreign_device_key_is_never_admitted() {
+    for state in ["revoked", "pending"] {
+        let (_directory, db) = common::temporary().await;
+        let owner = common::facade(&db, "a", common::Clock::new());
+        let key = device(7);
+        let auth = device_joined(&owner, key).await;
+        set_registry_state(&db, key, state).await;
+        assert!(matches!(admit(&owner, &auth).await, Err(_)), "{state}");
+        assert_ne!(
+            owner.enrolment_state(common::USER).await.unwrap().state(),
+            State::Admitted,
+            "{state}"
+        );
+        assert!(
+            owner
+                .membership(common::SUBJECT, common::now() as u64)
+                .await
+                .is_err()
+        );
+    }
+    let (_directory, db) = common::temporary().await;
+    let owner = common::facade(&db, "a", common::Clock::new());
+    let auth = device_joined(&owner, device(7)).await;
+    // A key never registered for her, or the right key for another community, is refused.
+    let unknown = Authentication::from_device_key("a".into(), auth.member(), device(8));
+    assert!(admit(&owner, &unknown).await.is_err());
+    let foreign = Authentication::from_device_key("b".into(), auth.member(), device(7));
+    assert!(admit(&owner, &foreign).await.is_err());
+    assert_ne!(
+        owner.enrolment_state(common::USER).await.unwrap().state(),
+        State::Admitted
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_passkey_member_without_a_live_passkey_is_still_no_source() {
+    let (_directory, db) = common::temporary().await;
+    let owner = common::facade(&db, "a", common::Clock::new());
+    let auth = admitted(&owner).await;
+    owner
+        .membership(common::SUBJECT, common::now() as u64)
+        .await
+        .unwrap();
+    let keys = owner.passkeys.clone();
+    let user = auth.member();
+    let credential = auth.credential_id().clone();
+    tokio::task::spawn_blocking(move || keys.revoke(user, &credential))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        owner
+            .membership(common::SUBJECT, common::now() as u64)
+            .await
+            .is_err()
+    );
+}

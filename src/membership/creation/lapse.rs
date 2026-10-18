@@ -73,7 +73,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         row: &Record,
         observed: u64,
     ) -> Result<crbk::Decision> {
-        self.identity(request.authentication).await?;
+        self.member_identity(request.authentication).await?;
         self.unrestricted(row.subject()).await?;
         let decision = request
             .policy

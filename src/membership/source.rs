@@ -156,13 +156,17 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             let guard = crate::storage::member_lock(self.storage.community(), row.user()).await;
             let row = self.enrol.view(row.user(), now_i64).await?;
             self.unrestricted(row.subject()).await?;
+            // A member stays a source while she holds a live passkey or, for a
+            // device-key member (no community passkey), an active device key.
+            let authorized_devices = self.live_device_keys(&row).await?;
             if row.subject() != member
                 || row.state() != State::Admitted
-                || !self
-                    .credentials(row.user())
-                    .await?
-                    .iter()
-                    .any(|key| !key.is_revoked())
+                || (authorized_devices.is_empty()
+                    && !self
+                        .credentials(row.user())
+                        .await?
+                        .iter()
+                        .any(|key| !key.is_revoked()))
             {
                 return Err(Error::Transition);
             }
@@ -211,7 +215,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                     state: row.state().membership(),
                     probation_until,
                     lease_end,
-                    authorized_devices: self.live_device_keys(&row).await?,
+                    authorized_devices,
                 },
                 SourceLease {
                     instance: self.instance.clone(),
