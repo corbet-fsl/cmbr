@@ -227,6 +227,24 @@ pub trait Storage: Send + Sync {
         key: [u8; 32],
         seed: [u8; 32],
     ) -> impl Future<Output = Result<bool>> + Send;
+    /// Register `key` as a PENDING device key of a member that already has a registered key
+    /// (stamped pairing). Returns false and changes nothing when the key is already
+    /// registered in any state (an equal retry is then recognised by `device_key_state`).
+    fn add_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> impl Future<Output = Result<bool>> + Send;
+    /// Move a registered key from `from` to `to` (pending to active, pending or active to
+    /// revoked; never out of revoked). Returns false and changes nothing when the key is not
+    /// currently in `from`.
+    fn set_device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        from: DeviceKeyState,
+        to: DeviceKeyState,
+    ) -> impl Future<Output = Result<bool>> + Send;
     /// The initial creation commitment and publication held by this member's ACTIVE device
     /// key; `None` when the key holds none. With `bind = (seed, publication)` the publication
     /// is set atomically first: an equal retry agrees, a different seed or winner refuses.
@@ -297,6 +315,23 @@ fn bind_input(bind: &Option<([u8; 32], [u8; 32])>) -> Result<()> {
     }
     Ok(())
 }
+fn state_text(state: DeviceKeyState) -> &'static str {
+    match state {
+        DeviceKeyState::Pending => "pending",
+        DeviceKeyState::Active => "active",
+        DeviceKeyState::Revoked => "revoked",
+    }
+}
+
+fn transition_allowed(from: DeviceKeyState, to: DeviceKeyState) -> bool {
+    matches!(
+        (from, to),
+        (DeviceKeyState::Pending, DeviceKeyState::Active)
+            | (DeviceKeyState::Pending, DeviceKeyState::Revoked)
+            | (DeviceKeyState::Active, DeviceKeyState::Revoked)
+    )
+}
+
 fn registry_state(text: &str) -> Result<DeviceKeyState> {
     match text {
         "pending" => Ok(DeviceKeyState::Pending),
@@ -587,6 +622,36 @@ impl Storage for MemoryStorage {
             },
         );
         Ok(true)
+    }
+    async fn add_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut state = self.state.lock().await;
+        let keys = state.registry.entry(member.to_owned()).or_default();
+        if keys.is_empty() || keys.contains_key(&key) {
+            return Ok(false);
+        }
+        keys.insert(key, DeviceKeyState::Pending);
+        Ok(true)
+    }
+    async fn set_device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        from: DeviceKeyState,
+        to: DeviceKeyState,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        if !transition_allowed(from, to) {
+            return Err(Error::InvalidInput);
+        }
+        let mut state = self.state.lock().await;
+        match state.registry.get_mut(member).and_then(|keys| keys.get_mut(&key)) {
+            Some(current) if *current == from => {
+                *current = to;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
     async fn device_initial_creation(
         &self,
@@ -935,6 +1000,54 @@ impl Storage for LibsqlStorage {
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+    async fn add_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut tx = self.scope.tx().await?;
+        let known = tx
+            .query(
+                "SELECT 1 FROM cvld_device_registry WHERE member = ?1 LIMIT 1",
+                params![member],
+            )
+            .await?;
+        let same = tx
+            .query(
+                "SELECT 1 FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        if known.is_empty() || !same.is_empty() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO cvld_device_registry (member, device_key, state) VALUES (?1, ?2, 'pending')",
+            params![member, key.to_vec()],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+    async fn set_device_key_state(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        from: DeviceKeyState,
+        to: DeviceKeyState,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        if !transition_allowed(from, to) {
+            return Err(Error::InvalidInput);
+        }
+        let mut tx = self.scope.tx().await?;
+        let changed = tx
+            .execute(
+                "UPDATE cvld_device_registry SET state = ?4 WHERE member = ?1 AND device_key = ?2 AND state = ?3",
+                params![member, key.to_vec(), state_text(from), state_text(to)],
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(changed > 0)
     }
     async fn device_initial_creation(
         &self,

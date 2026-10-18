@@ -536,6 +536,70 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(Some(row))
     }
 
+    /// Stamped pairing, step one: the service verified a confirmation stamp covering exactly
+    /// this `key` for the member behind `pseudonym`. Registers it PENDING (grants nothing).
+    /// An equal retry (key already pending or active) succeeds; a revoked key is refused.
+    pub async fn add_device_key(&self, pseudonym: &str, key: [u8; 32]) -> Result<()> {
+        crate::text(pseudonym)?;
+        self.unrestricted(pseudonym).await?;
+        let existing = self
+            .enrol_store
+            .load_subject(pseudonym)
+            .await?
+            .ok_or(Error::Identity)?;
+        let user = existing.user();
+        let _guard = crate::storage::member_lock(self.storage.community(), user).await;
+        let row = self.enrol.view(user, self.now()?).await?;
+        if row.state().is_terminal() {
+            return Err(Error::Transition);
+        }
+        let member = user.to_string();
+        if self.storage.add_device_key(&member, key).await? {
+            return Ok(());
+        }
+        match self.storage.device_key_state(&member, key).await? {
+            Some(crate::DeviceKeyState::Pending | crate::DeviceKeyState::Active) => Ok(()),
+            _ => Err(Error::Transition),
+        }
+    }
+
+    /// Stamped pairing, step two: the service verified the activation stamp (the lineage
+    /// revision covering `key` is published). Makes the PENDING key ACTIVE; idempotent for an
+    /// already active key; an unknown or revoked key is refused.
+    pub async fn activate_device_key(&self, pseudonym: &str, key: [u8; 32]) -> Result<()> {
+        crate::text(pseudonym)?;
+        self.unrestricted(pseudonym).await?;
+        let existing = self
+            .enrol_store
+            .load_subject(pseudonym)
+            .await?
+            .ok_or(Error::Identity)?;
+        let user = existing.user();
+        let _guard = crate::storage::member_lock(self.storage.community(), user).await;
+        let row = self.enrol.view(user, self.now()?).await?;
+        if row.state().is_terminal() {
+            return Err(Error::Transition);
+        }
+        let member = user.to_string();
+        let moved = self
+            .storage
+            .set_device_key_state(
+                &member,
+                key,
+                crate::DeviceKeyState::Pending,
+                crate::DeviceKeyState::Active,
+            )
+            .await?;
+        if moved
+            || self.storage.device_key_state(&member, key).await?
+                == Some(crate::DeviceKeyState::Active)
+        {
+            Ok(())
+        } else {
+            Err(Error::Transition)
+        }
+    }
+
     /// Revalidate a session's exact credential, including immediate revocation.
     /// An opaque ckyh authentication alone is not a renewable bearer capability.
     pub async fn session_is_active(
