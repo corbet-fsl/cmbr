@@ -7,7 +7,7 @@ use std::sync::{
 
 mod creation;
 pub mod resident;
-pub use creation::{Session, admission_request, ensure_active};
+pub use creation::{Session, admission_request, ensure_active, ensure_first_seat};
 
 use ckyh::Uuid;
 use ed25519_dalek::{Signer, SigningKey};
@@ -436,7 +436,9 @@ impl<C: clbs::Clock + 'static> TestApi for cmbr::Membership<cmbr::LibsqlStorage,
         let mut policy = verified_policy(raw, now()).await;
         let snapshot = policy.verified_settings(now() as u64).await.unwrap();
         let gates = checked(&snapshot, row.subject(), gates, now()).await;
-        let lobby = self.lobby(auth, &policy, &snapshot, &gates, now() as u64).await?;
+        let lobby = self
+            .lobby(auth, &policy, &snapshot, &gates, now() as u64)
+            .await?;
         Ok((lobby.enrolment, lobby.decision))
     }
     async fn lapse_test(

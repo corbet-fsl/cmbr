@@ -66,6 +66,15 @@ pub fn admission_request<'a>(
 pub async fn ensure_active<C: clbs::Clock + 'static>(
     owner: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
 ) -> cmbr::Result<()> {
+    ensure_first_seat(owner, crgs::Role::Admin).await
+}
+
+/// Activate the community with its first seat: `Admin` for every ordinary community, `Root` for the
+/// admin board (the host decides which, never the community name).
+pub async fn ensure_first_seat<C: clbs::Clock + 'static>(
+    owner: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
+    seat: crgs::Role,
+) -> cmbr::Result<()> {
     match owner.community_phase().await? {
         cmbr::CommunityPhase::Active => return Ok(()),
         cmbr::CommunityPhase::Uninitialized => {}
@@ -96,23 +105,30 @@ pub async fn ensure_active<C: clbs::Clock + 'static>(
         cmbr::CommunityPhase::Creating
     );
     let session = Session::new(&authentication, valid_until);
-    let admitted = owner
-        .admit_first_admin(
-            admission_request(
-                &authentication,
-                &policy,
-                &snapshot,
-                &gates,
-                now() as u64,
-                lease(),
-                &session,
-            ),
-            "fixture-first-root",
-        )
-        .await?;
+    let request = admission_request(
+        &authentication,
+        &policy,
+        &snapshot,
+        &gates,
+        now() as u64,
+        lease(),
+        &session,
+    );
+    let admitted = match seat {
+        crgs::Role::Root => {
+            owner
+                .admit_first_root(request, "fixture-first-root")
+                .await?
+        }
+        _ => {
+            owner
+                .admit_first_admin(request, "fixture-first-root")
+                .await?
+        }
+    };
     assert_eq!(admitted.state(), cnrl::State::Admitted);
     let root = owner.member(&authentication).await?.unwrap();
-    assert_eq!(root.role, crgs::Role::Admin);
+    assert_eq!(root.role, seat);
     assert_eq!(root.id.as_bytes(), subject.as_bytes());
     assert_eq!(owner.community_phase().await?, cmbr::CommunityPhase::Active);
     Ok(())

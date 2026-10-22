@@ -5,18 +5,15 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy)]
 enum Entitlement<'a> {
     Ordinary,
-    /// Creation id of the community whose creator takes the first admin seat.
-    FirstAdmin(&'a str),
+    /// Creation id of the community whose creator takes the first seat, and the
+    /// role of that seat: the caller decides it (never the community name).
+    First(&'a str, crgs::Role),
 }
 impl Entitlement<'_> {
-    /// The first seat of the Root board community itself is a Root seat: the
-    /// board has no higher authority to promote its first member. Every other
-    /// community's creator becomes its first admin.
-    fn role(self, community: &str) -> crgs::Role {
+    fn role(self) -> crgs::Role {
         match self {
             Self::Ordinary => crgs::Role::Member,
-            Self::FirstAdmin(_) if community == "root" => crgs::Role::Root,
-            Self::FirstAdmin(_) => crgs::Role::Admin,
+            Self::First(_, role) => role,
         }
     }
 }
@@ -70,7 +67,22 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         request: AdmissionRequest<'_, R, P, K>,
         id: &str,
     ) -> Result<Record> {
-        self.admit_creation_current(request, Entitlement::FirstAdmin(id))
+        self.admit_creation_current(request, Entitlement::First(id, crgs::Role::Admin))
+            .await
+    }
+
+    /// Admit the recorded creator of the admin board as its first Root seat. The
+    /// board has no higher authority to promote its first member, so its first
+    /// seat is the Root seat of the platform role. The HOST decides that this
+    /// community is the board (from its public board descriptor, never from the
+    /// community name) and calls this instead of [`Self::admit_first_admin`];
+    /// every other effect and refusal is identical.
+    pub async fn admit_first_root<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
+        &self,
+        request: AdmissionRequest<'_, R, P, K>,
+        id: &str,
+    ) -> Result<Record> {
+        self.admit_creation_current(request, Entitlement::First(id, crgs::Role::Root))
             .await
     }
 
@@ -105,7 +117,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         let pending = match (entitlement, &phase) {
             (Entitlement::Ordinary, _) => None,
             (
-                Entitlement::FirstAdmin(id),
+                Entitlement::First(id, _),
                 Some(
                     Phase::Creating(current)
                     | Phase::Active {
@@ -147,8 +159,8 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 None,
                 Some(Phase::Active { .. } | Phase::LegacyActive { .. }),
             ) => false,
-            (Entitlement::FirstAdmin(_), Some(_), Some(Phase::Creating(_))) => false,
-            (Entitlement::FirstAdmin(_), Some(_), Some(Phase::Active { root, .. })) => {
+            (Entitlement::First(..), Some(_), Some(Phase::Creating(_))) => false,
+            (Entitlement::First(..), Some(_), Some(Phase::Active { root, .. })) => {
                 if root != &original.member_id() {
                     return Err(Error::Transition);
                 }
@@ -176,7 +188,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         if retry {
             let existing = existing.ok_or(Error::Transition)?;
             if original.state() != State::Admitted
-                || existing.role != entitlement.role(self.community())
+                || existing.role != entitlement.role()
                 || existing.handle.is_none()
                 || existing.lease_end != lease
                 || roles::lease_deadline(existing.lease_end)? <= observed
@@ -220,7 +232,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                     crgs::Admission {
                         id: row.member_id(),
                         handle,
-                        role: entitlement.role(self.community()),
+                        role: entitlement.role(),
                         lease_end: lease,
                     },
                     current,
