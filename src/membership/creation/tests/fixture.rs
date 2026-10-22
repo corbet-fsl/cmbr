@@ -7,7 +7,7 @@ pub(super) type SqlPolicy =
 
 pub(super) struct Session {
     authentication: Authentication,
-    until: u64,
+    pub until: u64,
     pub live: AtomicBool,
     pub calls: AtomicUsize,
     pub remove_at: usize,

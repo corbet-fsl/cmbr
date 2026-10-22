@@ -166,8 +166,12 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(now)
     }
 
+    /// A commit cut evaluates at `observed` (decided 2026-10-18: commit authorities
+    /// evaluate at the observed time). It refuses only a live clock before
+    /// `observed` or a crossed scheduled boundary (`until`, the earliest of the
+    /// claim, session, snapshot and registration ends); a plain later second commits.
     fn creation_cut(&self, observed: u64, until: u64) -> Result<()> {
-        if self.creation_time(until)? != observed {
+        if self.creation_time(until)? < observed {
             return Err(Error::Transition);
         }
         Ok(())

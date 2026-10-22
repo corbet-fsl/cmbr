@@ -74,12 +74,13 @@ async fn real_sdk_and_policy_writers_are_excluded_at_staged_root_final_cut() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn actual_clock_advance_at_final_staged_cut_rolls_back() {
+async fn a_crossed_session_end_at_final_staged_cut_rolls_back() {
     let mut fixture = Fixture::new().await;
     let invitation = fixture.first_invitation();
     fixture.initialize(&invitation).await;
     let clock = fixture.clock.clone();
-    fixture.session.at_final_cut = Some(Box::new(move || clock.set(common::now() + 1)));
+    let end = fixture.session.until as i64;
+    fixture.session.at_final_cut = Some(Box::new(move || clock.set(end)));
     assert_eq!(
         fixture
             .owner
@@ -89,6 +90,30 @@ async fn actual_clock_advance_at_final_staged_cut_rolls_back() {
     );
     assert_eq!(fixture.session.calls.load(Ordering::SeqCst), 3);
     fixture.assert_pending().await;
+}
+
+/// Commit authorities evaluate at the observed time: a live second passing during
+/// the staged admission, with no scheduled boundary in between, commits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plain_later_second_at_final_staged_cut_commits() {
+    let mut fixture = Fixture::new().await;
+    let invitation = fixture.first_invitation();
+    fixture.initialize(&invitation).await;
+    let clock = fixture.clock.clone();
+    fixture.session.at_final_cut = Some(Box::new(move || clock.set(common::now() + 1)));
+    assert_eq!(
+        fixture
+            .owner
+            .admit_first_admin(fixture.request(), &invitation)
+            .await
+            .unwrap()
+            .state(),
+        State::Admitted
+    );
+    assert_eq!(
+        fixture.owner.community_phase().await.unwrap(),
+        CommunityPhase::Active
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
