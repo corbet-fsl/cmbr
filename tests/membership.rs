@@ -430,7 +430,7 @@ async fn additional_device_preserves_membership_and_survives_original_removal() 
     let snapshot = live_policy.verified_settings(now() as u64).await.unwrap();
     let gates = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now()).await;
     let lobby = m
-        .lobby(&survivor.authentication, &live_policy, &snapshot, &gates)
+        .lobby(&survivor.authentication, &live_policy, &snapshot, &gates, now() as u64)
         .await
         .unwrap();
     assert!(

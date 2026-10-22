@@ -595,12 +595,15 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
     }
 
     /// Pure lobby: current facts and cplc's decision, without lifecycle writes.
+    /// `checked_at` is the time the gates were checked at (their context); the
+    /// decision evaluates them at the live clock, which must not lie before it.
     pub async fn lobby<R: crbk::Storage, P: cplc::Storage, K: cplc::csgn::Store>(
         &self,
         auth: &Authentication,
         policy: &cplc::Policy<R, P, K>,
         snapshot: &cplc::VerifiedSnapshot,
         gates: &cgts::CheckedGates,
+        checked_at: u64,
     ) -> Result<Lobby> {
         let now = self.now()?;
         let row = self.authenticated_member(auth, now).await?;
@@ -608,7 +611,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Identity);
         }
         let decision = policy
-            .may(
+            .may_current(
                 snapshot,
                 crbk::Subject {
                     id: row.subject(),
@@ -616,6 +619,7 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
                 },
                 &self.action,
                 gates,
+                checked_at,
                 now as u64,
             )
             .await

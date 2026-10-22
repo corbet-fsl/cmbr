@@ -548,7 +548,7 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
     let snapshot = policy.verified_settings(now() as u64).await.unwrap();
     let empty = checked(&snapshot, SUBJECT, &[], now()).await;
     let lobby = m
-        .lobby(&login.authentication, &policy, &snapshot, &empty)
+        .lobby(&login.authentication, &policy, &snapshot, &empty, now() as u64)
         .await
         .unwrap();
     assert!(lobby.warnings.iter().any(|warning| matches!(warning, Warning::RegistrationExpires { deadline } if deadline % 86400 == 0)));
@@ -573,7 +573,7 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
     .unwrap();
     let before = m.enrol_store.load(USER).await.unwrap().unwrap();
     let lobby = m
-        .lobby(&login.authentication, &policy, &snapshot, &empty)
+        .lobby(&login.authentication, &policy, &snapshot, &empty, now() as u64)
         .await
         .unwrap();
     assert!(!lobby.decision.allowed);
@@ -589,6 +589,30 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
         m.storage.probation(SUBJECT).await.unwrap(),
         Some(Some(cplc::day(now() as u64) + 14 * cplc::DAY))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lobby_evaluates_gates_checked_a_second_earlier_and_refuses_a_clock_before_them() {
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "a", clock.clone());
+    let (_, login) = pending(&m, "a").await;
+    let mut policy = verified_policy(&policy("a"), now()).await;
+    let snapshot = policy.verified_settings(now() as u64).await.unwrap();
+    let gates = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now()).await;
+    // A second passes between the gate check and the lobby read: no refusal.
+    clock.set(now() + 1);
+    let lobby = m
+        .lobby(&login.authentication, &policy, &snapshot, &gates, now() as u64)
+        .await
+        .unwrap();
+    assert_eq!(lobby.enrolment, m.enrol_store.load(USER).await.unwrap().unwrap());
+    // A live clock before the gates' check time is a regression: refused.
+    let later = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now() + 5).await;
+    assert!(matches!(
+        m.lobby(&login.authentication, &policy, &snapshot, &later, (now() + 5) as u64).await,
+        Err(Error::Policy)
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -619,7 +643,7 @@ async fn stale_verified_inputs_and_unbounded_leases_cannot_admit() {
         .await
         .unwrap();
     assert!(matches!(
-        m.lobby(&login.authentication, &policy, &old, &gates).await,
+        m.lobby(&login.authentication, &policy, &old, &gates, now() as u64).await,
         Err(Error::Policy)
     ));
     assert_eq!(
