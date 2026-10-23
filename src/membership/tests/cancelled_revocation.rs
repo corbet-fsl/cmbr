@@ -53,8 +53,30 @@ impl Storage for PausedSignal {
             .approve_pending_device(member, credential, approver)
             .await
     }
-    async fn add_device_key(&self, member: &str, key: [u8; 32]) -> crate::Result<bool> {
-        self.inner.add_device_key(member, key).await
+    async fn add_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+    ) -> crate::Result<bool> {
+        self.inner.add_device_key(member, key, pending_until).await
+    }
+    async fn pending_device_key_until(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> crate::Result<Option<i64>> {
+        self.inner.pending_device_key_until(member, key).await
+    }
+    async fn remove_expired_pending_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        now: i64,
+    ) -> crate::Result<bool> {
+        self.inner
+            .remove_expired_pending_device_key(member, key, now)
+            .await
     }
     async fn set_device_key_state(
         &self,

@@ -94,6 +94,7 @@ async fn libsql_coarse_facts_are_indexed_isolated_and_persistent() {
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
         crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
         crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+        crlt::Migration::new(5, "device-pairing", DEVICE_PAIRING_SCHEMA),
     ];
     db.migrate(&history).await.unwrap();
     contract(LibsqlStorage::new(&db, "test").unwrap()).await;
@@ -278,6 +279,7 @@ async fn libsql_rejects_real_dynamic_type_corruption_and_keeps_atomic_outbox() {
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
         crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
         crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+        crlt::Migration::new(5, "device-pairing", DEVICE_PAIRING_SCHEMA),
     ])
     .await
     .unwrap();
@@ -574,6 +576,7 @@ async fn libsql_device_initial_creation_contract_persists() {
         crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
         crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
         crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+        crlt::Migration::new(5, "device-pairing", DEVICE_PAIRING_SCHEMA),
     ];
     db.migrate(&history).await.unwrap();
     device_initial_contract(LibsqlStorage::new(&db, "test").unwrap()).await;
@@ -597,4 +600,127 @@ async fn libsql_device_initial_creation_contract_persists() {
             .await,
         Ok(None)
     );
+}
+
+/// A pairing-approved key is PENDING with an expiry: it activates only through its own
+/// state move, expires by `remove_expired_pending_device_key`, and a key in any other state
+/// reports no expiry and is never removed.
+async fn pairing_pending_contract(store: impl Storage) {
+    let (first, second, third) = (device_key(11), device_key(12), device_key(13));
+    // A member needs a registered key before another may be added.
+    assert_eq!(store.add_device_key("p", second, 1_000).await, Ok(false));
+    assert!(
+        store
+            .bind_first_device_key("p", first, [1; 32])
+            .await
+            .unwrap()
+    );
+    // The expiry must be a positive instant.
+    assert!(store.add_device_key("p", second, 0).await.is_err());
+    assert!(store.add_device_key("p", second, 1_000).await.unwrap());
+    assert!(!store.add_device_key("p", second, 2_000).await.unwrap());
+    assert_eq!(
+        store.pending_device_key_until("p", second).await,
+        Ok(Some(1_000))
+    );
+    // The active first key and an unknown key hold no expiry and are never removed.
+    assert_eq!(store.pending_device_key_until("p", first).await, Ok(None));
+    assert_eq!(store.pending_device_key_until("p", third).await, Ok(None));
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("p", first, i64::MAX)
+            .await,
+        Ok(false)
+    );
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("p", third, i64::MAX)
+            .await,
+        Ok(false)
+    );
+    // A live key survives; at its expiry instant it is removed, and the slot is free again.
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("p", second, 999)
+            .await,
+        Ok(false)
+    );
+    assert_eq!(
+        store.device_key_state("p", second).await,
+        Ok(Some(DeviceKeyState::Pending))
+    );
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("p", second, 1_000)
+            .await,
+        Ok(true)
+    );
+    assert_eq!(store.device_key_state("p", second).await, Ok(None));
+    assert!(store.add_device_key("p", second, 5_000).await.unwrap());
+    // Activation clears the expiry for good: an active key can no longer be removed.
+    assert!(
+        store
+            .set_device_key_state("p", second, DeviceKeyState::Pending, DeviceKeyState::Active)
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.pending_device_key_until("p", second).await, Ok(None));
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("p", second, i64::MAX)
+            .await,
+        Ok(false)
+    );
+    assert_eq!(
+        store.device_key_state("p", second).await,
+        Ok(Some(DeviceKeyState::Active))
+    );
+}
+#[tokio::test]
+async fn memory_pairing_pending_contract() {
+    pairing_pending_contract(MemoryStorage::new("test").unwrap()).await;
+}
+#[tokio::test]
+async fn libsql_pairing_pending_contract_persists_and_legacy_rows_are_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", dir.path().join("pairing.db").display());
+    let db = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    let before = [
+        crlt::Migration::new(1, "cmbr", SCHEMA),
+        crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+        crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
+        crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+    ];
+    db.migrate(&before).await.unwrap();
+    // A PENDING row written before the pairing migration carries no expiry.
+    LibsqlStorage::new(&db, "test")
+        .unwrap()
+        .scope
+        .execute(
+            "INSERT INTO cvld_device_registry (member, device_key, state) VALUES (?1, ?2, 'pending')",
+            params!["legacy", device_key(21).to_vec()],
+        )
+        .await
+        .unwrap();
+    let mut history = before.to_vec();
+    history.push(crlt::Migration::new(
+        5,
+        "device-pairing",
+        DEVICE_PAIRING_SCHEMA,
+    ));
+    db.migrate(&history).await.unwrap();
+    let store = LibsqlStorage::new(&db, "test").unwrap();
+    assert_eq!(
+        store
+            .pending_device_key_until("legacy", device_key(21))
+            .await,
+        Ok(Some(0))
+    );
+    assert_eq!(
+        store
+            .remove_expired_pending_device_key("legacy", device_key(21), 1)
+            .await,
+        Ok(true)
+    );
+    pairing_pending_contract(LibsqlStorage::new(&db, "test").unwrap()).await;
 }

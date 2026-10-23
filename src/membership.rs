@@ -99,6 +99,14 @@ pub enum Warning {
 /// Seconds a pairing device key stays pending before it expires on its own.
 pub const PENDING_DEVICE_SECONDS: u64 = 300;
 
+/// Seconds a device key approved by the pairing stamp (`device_add`) stays PENDING before it
+/// expires and the pairing must start again. 900 s = three times the 300 s a pairing offer
+/// lives (door `OFFER_SECONDS`): after the approval the host still publishes the lineage
+/// revision, which can stall over Tor with a forced read, and only then does the new device
+/// activate. The key grants nothing while PENDING, so the window stays short, and a longer one
+/// would let a stolen approval wait for a better moment.
+pub const PAIRING_PENDING_SECONDS: i64 = 900;
+
 /// Membership service for one community. All leaf capabilities stay private.
 /// The coordinator must be shared by every writer to this community database.
 /// Pin changes use cgts's sealed spend adapter; supply a real self-ban verifier.
@@ -536,9 +544,12 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         Ok(Some(row))
     }
 
-    /// Stamped pairing, step one: the service verified a confirmation stamp covering exactly
-    /// this `key` for the member behind `pseudonym`. Registers it PENDING (grants nothing).
-    /// An equal retry (key already pending or active) succeeds; a revoked key is refused.
+    /// Stamped pairing, step one: the service verified the pairing stamp (one slot per
+    /// community, covering this exact `key` under `pseudonym`). Registers it PENDING, with the
+    /// approval and an expiry of [`PAIRING_PENDING_SECONDS`]; a PENDING key grants nothing.
+    /// An equal retry succeeds only while the PENDING key lives (it does not extend it); an
+    /// expired PENDING key is dropped and this approval starts a new one; an active or revoked
+    /// key is refused.
     pub async fn add_device_key(&self, pseudonym: &str, key: [u8; 32]) -> Result<()> {
         crate::text(pseudonym)?;
         self.unrestricted(pseudonym).await?;
@@ -554,18 +565,26 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Transition);
         }
         let member = user.to_string();
-        if self.storage.add_device_key(&member, key).await? {
+        let now = self.now()?;
+        self.storage
+            .remove_expired_pending_device_key(&member, key, now)
+            .await?;
+        let until = now
+            .checked_add(PAIRING_PENDING_SECONDS)
+            .ok_or(Error::InvalidInput)?;
+        if self.storage.add_device_key(&member, key, until).await? {
             return Ok(());
         }
-        match self.storage.device_key_state(&member, key).await? {
-            Some(crate::DeviceKeyState::Pending | crate::DeviceKeyState::Active) => Ok(()),
+        match self.storage.pending_device_key_until(&member, key).await? {
+            Some(held) if held > now => Ok(()),
             _ => Err(Error::Transition),
         }
     }
 
-    /// Stamped pairing, step two: the service verified the activation stamp (the lineage
-    /// revision covering `key` is published). Makes the PENDING key ACTIVE; idempotent for an
-    /// already active key; an unknown or revoked key is refused.
+    /// Stamped pairing, step two: the lineage revision covering `key` is published and the new
+    /// key proved possession. Makes the PENDING key ACTIVE only while the approval recorded at
+    /// `add_device_key` lives. An expired PENDING key is removed and refused; an unknown or
+    /// revoked key is refused; an already active key stays active (idempotent).
     pub async fn activate_device_key(&self, pseudonym: &str, key: [u8; 32]) -> Result<()> {
         crate::text(pseudonym)?;
         self.unrestricted(pseudonym).await?;
@@ -581,22 +600,39 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
             return Err(Error::Transition);
         }
         let member = user.to_string();
-        let moved = self
-            .storage
-            .set_device_key_state(
-                &member,
-                key,
-                crate::DeviceKeyState::Pending,
-                crate::DeviceKeyState::Active,
-            )
-            .await?;
-        if moved
-            || self.storage.device_key_state(&member, key).await?
-                == Some(crate::DeviceKeyState::Active)
-        {
-            Ok(())
-        } else {
-            Err(Error::Transition)
+        let now = self.now()?;
+        match self.storage.pending_device_key_until(&member, key).await? {
+            Some(until) if until > now => {
+                let moved = self
+                    .storage
+                    .set_device_key_state(
+                        &member,
+                        key,
+                        crate::DeviceKeyState::Pending,
+                        crate::DeviceKeyState::Active,
+                    )
+                    .await?;
+                if moved
+                    || self.storage.device_key_state(&member, key).await?
+                        == Some(crate::DeviceKeyState::Active)
+                {
+                    Ok(())
+                } else {
+                    Err(Error::Transition)
+                }
+            }
+            Some(_) => {
+                self.storage
+                    .remove_expired_pending_device_key(&member, key, now)
+                    .await?;
+                Err(Error::Transition)
+            }
+            None if self.storage.device_key_state(&member, key).await?
+                == Some(crate::DeviceKeyState::Active) =>
+            {
+                Ok(())
+            }
+            None => Err(Error::Transition),
         }
     }
 

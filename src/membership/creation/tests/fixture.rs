@@ -74,6 +74,7 @@ pub(super) fn migrations() -> Vec<crlt::Migration<'static>> {
         ("signing", cplc::csgn::SCHEMA),
         ("policy", cplc::SCHEMA),
         ("device-registry", crate::DEVICE_REGISTRY_SCHEMA),
+        ("device-pairing", crate::DEVICE_PAIRING_SCHEMA),
     ]);
     schemas
         .into_iter()

@@ -49,6 +49,11 @@ async fn open(path: &std::path::Path) -> crlt::Db {
         "device-registry",
         crate::DEVICE_REGISTRY_SCHEMA,
     ));
+    history.push(crlt::Migration::new(
+        history.len() as u32 + 1,
+        "device-pairing",
+        crate::DEVICE_PAIRING_SCHEMA,
+    ));
     db.migrate(&history).await.unwrap();
     db
 }

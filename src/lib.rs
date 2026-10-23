@@ -12,15 +12,16 @@ mod storage;
 
 pub use membership::{
     AdmissionRequest, CommunityPhase, Config, ConfirmedSelfBan, InitialCreationState, Lobby, Login,
-    Membership, PENDING_DEVICE_SECONDS, PendingAdditionalRegistration, PendingLogin,
-    PendingPinChange, PendingRegistration, PendingSelfBanConfirmation, PendingSelfBanStatus,
-    RegisteredPasskey, RoleLease, RoleSession, SelfBanStatus, SourceLease, Warning,
+    Membership, PAIRING_PENDING_SECONDS, PENDING_DEVICE_SECONDS, PendingAdditionalRegistration,
+    PendingLogin, PendingPinChange, PendingRegistration, PendingSelfBanConfirmation,
+    PendingSelfBanStatus, RegisteredPasskey, RoleLease, RoleSession, SelfBanStatus, SourceLease,
+    Warning,
 };
 pub use storage::creation::CREATION_SCHEMA;
 pub use storage::{
-    DEVICE_KEYS_SCHEMA, DEVICE_PENDING_SCHEMA, DEVICE_REGISTRY_SCHEMA, DeviceInitialCreation,
-    DeviceKeyBinding, DeviceKeyState, LibsqlStorage, MemoryStorage, PendingDeviceKey, Revocation,
-    SCHEMA, Storage,
+    DEVICE_KEYS_SCHEMA, DEVICE_PAIRING_SCHEMA, DEVICE_PENDING_SCHEMA, DEVICE_REGISTRY_SCHEMA,
+    DeviceInitialCreation, DeviceKeyBinding, DeviceKeyState, LibsqlStorage, MemoryStorage,
+    PendingDeviceKey, Revocation, SCHEMA, Storage,
 };
 // Export protocol values only; callers cannot reach leaf writers through cmbr.
 pub use ckyh::{Authentication, Uuid};

@@ -47,6 +47,13 @@ pub const DEVICE_REGISTRY_SCHEMA: &str = "CREATE TABLE cvld_device_registry (
     PRIMARY KEY (community_id, member, device_key)
 ) WITHOUT ROWID;";
 
+/// Pairing expiry of a PENDING device key: the instant (seconds) after which a key that
+/// the pairing approved at `device_add` but that was never activated is dead. Appended after
+/// `DEVICE_REGISTRY_SCHEMA`; a PENDING row without it (NULL) counts as already expired.
+pub const DEVICE_PAIRING_SCHEMA: &str =
+    "ALTER TABLE cvld_device_registry ADD COLUMN pending_until INTEGER
+    CHECK (pending_until IS NULL OR pending_until > 0);";
+
 /// The opaque initial creation commitment held by a device-key member's first device key,
 /// and the one publication bound to it, if any. Never a root, signing or use capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,10 +237,27 @@ pub trait Storage: Send + Sync {
     /// Register `key` as a PENDING device key of a member that already has a registered key
     /// (stamped pairing). Returns false and changes nothing when the key is already
     /// registered in any state (an equal retry is then recognised by `device_key_state`).
+    /// The new PENDING row lives until `pending_until` (seconds, positive).
     fn add_device_key(
         &self,
         member: &str,
         key: [u8; 32],
+        pending_until: i64,
+    ) -> impl Future<Output = Result<bool>> + Send;
+    /// The instant a PENDING key of this member expires; `None` when the key is not PENDING.
+    /// A legacy PENDING row that carries no expiry reports 0 (long expired).
+    fn pending_device_key_until(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> impl Future<Output = Result<Option<i64>>> + Send;
+    /// Delete a PENDING key whose expiry is at or before `now`. Returns false and changes
+    /// nothing for a live PENDING key, an active or revoked key, or an unknown key.
+    fn remove_expired_pending_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        now: i64,
     ) -> impl Future<Output = Result<bool>> + Send;
     /// Move a registered key from `from` to `to` (pending to active, pending or active to
     /// revoked; never out of revoked). Returns false and changes nothing when the key is not
@@ -280,6 +304,12 @@ fn registry_input(member: &str, key: &[u8; 32]) -> Result<()> {
     }
     let public = ed25519_dalek::VerifyingKey::from_bytes(key).map_err(|_| Error::InvalidInput)?;
     if public.is_weak() {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+fn pending_until_input(pending_until: i64) -> Result<()> {
+    if pending_until <= 0 {
         return Err(Error::InvalidInput);
     }
     Ok(())
@@ -363,6 +393,8 @@ struct MemoryState {
     pending: BTreeMap<(String, Vec<u8>), PendingEntry>,
     revocations: BTreeMap<String, (u64, bool)>,
     registry: BTreeMap<String, BTreeMap<[u8; 32], DeviceKeyState>>,
+    /// Expiry of every PENDING registry key (seconds); absent for keys in any other state.
+    pending_until: BTreeMap<(String, [u8; 32]), i64>,
     initial: BTreeMap<(String, [u8; 32]), DeviceInitialCreation>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
@@ -623,14 +655,66 @@ impl Storage for MemoryStorage {
         );
         Ok(true)
     }
-    async fn add_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+    async fn add_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+    ) -> Result<bool> {
         registry_input(member, &key)?;
+        pending_until_input(pending_until)?;
         let mut state = self.state.lock().await;
         let keys = state.registry.entry(member.to_owned()).or_default();
         if keys.is_empty() || keys.contains_key(&key) {
             return Ok(false);
         }
         keys.insert(key, DeviceKeyState::Pending);
+        state
+            .pending_until
+            .insert((member.to_owned(), key), pending_until);
+        Ok(true)
+    }
+    async fn pending_device_key_until(&self, member: &str, key: [u8; 32]) -> Result<Option<i64>> {
+        registry_input(member, &key)?;
+        let state = self.state.lock().await;
+        let pending = state
+            .registry
+            .get(member)
+            .and_then(|keys| keys.get(&key))
+            .is_some_and(|current| *current == DeviceKeyState::Pending);
+        Ok(pending.then(|| {
+            state
+                .pending_until
+                .get(&(member.to_owned(), key))
+                .copied()
+                .unwrap_or(0)
+        }))
+    }
+    async fn remove_expired_pending_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        now: i64,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut state = self.state.lock().await;
+        let pending = state
+            .registry
+            .get(member)
+            .and_then(|keys| keys.get(&key))
+            .is_some_and(|current| *current == DeviceKeyState::Pending);
+        let until = state
+            .pending_until
+            .get(&(member.to_owned(), key))
+            .copied()
+            .unwrap_or(0);
+        if !pending || until > now {
+            return Ok(false);
+        }
+        if let Some(keys) = state.registry.get_mut(member) {
+            keys.remove(&key);
+        }
+        state.pending_until.remove(&(member.to_owned(), key));
         Ok(true)
     }
     async fn set_device_key_state(
@@ -645,13 +729,21 @@ impl Storage for MemoryStorage {
             return Err(Error::InvalidInput);
         }
         let mut state = self.state.lock().await;
-        match state.registry.get_mut(member).and_then(|keys| keys.get_mut(&key)) {
+        let moved = match state
+            .registry
+            .get_mut(member)
+            .and_then(|keys| keys.get_mut(&key))
+        {
             Some(current) if *current == from => {
                 *current = to;
-                Ok(true)
+                true
             }
-            _ => Ok(false),
+            _ => false,
+        };
+        if moved && from == DeviceKeyState::Pending {
+            state.pending_until.remove(&(member.to_owned(), key));
         }
+        Ok(moved)
     }
     async fn device_initial_creation(
         &self,
@@ -1001,8 +1093,14 @@ impl Storage for LibsqlStorage {
         tx.commit().await?;
         Ok(true)
     }
-    async fn add_device_key(&self, member: &str, key: [u8; 32]) -> Result<bool> {
+    async fn add_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+    ) -> Result<bool> {
         registry_input(member, &key)?;
+        pending_until_input(pending_until)?;
         let mut tx = self.scope.tx().await?;
         let known = tx
             .query(
@@ -1021,12 +1119,45 @@ impl Storage for LibsqlStorage {
             return Ok(false);
         }
         tx.execute(
-            "INSERT INTO cvld_device_registry (member, device_key, state) VALUES (?1, ?2, 'pending')",
-            params![member, key.to_vec()],
+            "INSERT INTO cvld_device_registry (member, device_key, state, pending_until) VALUES (?1, ?2, 'pending', ?3)",
+            params![member, key.to_vec(), pending_until],
         )
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+    async fn pending_device_key_until(&self, member: &str, key: [u8; 32]) -> Result<Option<i64>> {
+        registry_input(member, &key)?;
+        let rows = self
+            .scope
+            .query(
+                "SELECT COALESCE(pending_until, 0) FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2 AND state = 'pending'",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        rows.first()
+            .map(|row| match row.get_value(0)? {
+                crlt::Value::Integer(until) => Ok(*until),
+                _ => Err(Error::Unavailable),
+            })
+            .transpose()
+    }
+    async fn remove_expired_pending_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        now: i64,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        let mut tx = self.scope.tx().await?;
+        let removed = tx
+            .execute(
+                "DELETE FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2 AND state = 'pending' AND COALESCE(pending_until, 0) <= ?3",
+                params![member, key.to_vec(), now],
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(removed > 0)
     }
     async fn set_device_key_state(
         &self,
@@ -1042,7 +1173,7 @@ impl Storage for LibsqlStorage {
         let mut tx = self.scope.tx().await?;
         let changed = tx
             .execute(
-                "UPDATE cvld_device_registry SET state = ?4 WHERE member = ?1 AND device_key = ?2 AND state = ?3",
+                "UPDATE cvld_device_registry SET state = ?4, pending_until = NULL WHERE member = ?1 AND device_key = ?2 AND state = ?3",
                 params![member, key.to_vec(), state_text(from), state_text(to)],
             )
             .await?;
