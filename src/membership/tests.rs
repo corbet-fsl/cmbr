@@ -1176,3 +1176,44 @@ async fn an_applied_device_join_is_reconfirmed_read_only_and_only_for_its_key_an
         Err(Error::InvalidInput)
     ));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restricted_member_can_neither_add_nor_activate_a_device_key() {
+    use ed25519_dalek::Signer as _;
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "a", Clock::new());
+    let device = |byte: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[byte; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    m.join_with_device_key(USER, SUBJECT, device(7), [9; 32])
+        .await
+        .unwrap();
+    // A live PENDING key exists, then a legal order restricts the member.
+    m.add_device_key(SUBJECT, device(8)).await.unwrap();
+    let order = clbs::Order {
+        community: "a".into(),
+        id: "blocked".into(),
+        subject: SUBJECT.into(),
+        reference: "explicit signature fixture".into(),
+        entered_by: "fixture-operator".into(),
+        kind: clbs::OrderKind::Legal {
+            authority: "fixture-signature-authority".into(),
+        },
+    };
+    let proof = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .sign(&order.signing_payload().unwrap())
+        .to_bytes()
+        .to_vec();
+    m.legal
+        .record_legal(&clbs::SignedOrder { order, proof })
+        .await
+        .unwrap();
+    assert_eq!(m.add_device_key(SUBJECT, device(9)).await, Err(Error::Restricted));
+    assert_eq!(m.add_device_key(SUBJECT, device(8)).await, Err(Error::Restricted));
+    assert_eq!(
+        m.activate_device_key(SUBJECT, device(8)).await,
+        Err(Error::Restricted)
+    );
+}

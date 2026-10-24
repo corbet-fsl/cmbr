@@ -123,6 +123,7 @@ pub fn migrations() -> Vec<crlt::Migration<'static>> {
         ("creation", cmbr::CREATION_SCHEMA),
         ("cmbr-device-pending", cmbr::DEVICE_PENDING_SCHEMA),
         ("device-registry", cmbr::DEVICE_REGISTRY_SCHEMA),
+        ("device-pairing", cmbr::DEVICE_PAIRING_SCHEMA),
     ]);
     schemas
         .into_iter()
