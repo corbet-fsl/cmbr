@@ -1217,3 +1217,27 @@ async fn a_restricted_member_can_neither_add_nor_activate_a_device_key() {
         Err(Error::Restricted)
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_self_banned_member_can_neither_add_nor_activate_a_device_key() {
+    let (_dir, db) = temporary().await;
+    let m = facade(&db, "a", Clock::new());
+    let device = |byte: u8| {
+        ed25519_dalek::SigningKey::from_bytes(&[byte; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    m.join_with_device_key(USER, SUBJECT, device(7), [9; 32])
+        .await
+        .unwrap();
+    // Before the ban a key can be registered PENDING.
+    m.add_device_key(SUBJECT, device(8)).await.unwrap();
+    // The confirmed self-ban order, recorded exactly as `Membership::self_ban` records it
+    // once the member's identity is checked.
+    m.legal.self_ban(&ban("a")).await.unwrap();
+    // After it nothing is added, retried or activated, however live the PENDING row.
+    for key in [device(8), device(9)] {
+        assert!(m.add_device_key(SUBJECT, key).await.is_err());
+        assert!(m.activate_device_key(SUBJECT, key).await.is_err());
+    }
+}
