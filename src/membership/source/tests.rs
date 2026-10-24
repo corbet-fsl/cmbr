@@ -230,7 +230,9 @@ async fn cancellation_while_real_pool_read_waits_cannot_revive_original_lease() 
 
 /// A real Ed25519 public key: the device registry refuses anything else.
 fn device(byte: u8) -> [u8; 32] {
-    SigningKey::from_bytes(&[byte; 32]).verifying_key().to_bytes()
+    SigningKey::from_bytes(&[byte; 32])
+        .verifying_key()
+        .to_bytes()
 }
 
 /// JOIN by device key (no community passkey) and the session that key signs in with.

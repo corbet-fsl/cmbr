@@ -548,7 +548,13 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
     let snapshot = policy.verified_settings(now() as u64).await.unwrap();
     let empty = checked(&snapshot, SUBJECT, &[], now()).await;
     let lobby = m
-        .lobby(&login.authentication, &policy, &snapshot, &empty, now() as u64)
+        .lobby(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &empty,
+            now() as u64,
+        )
         .await
         .unwrap();
     assert!(lobby.warnings.iter().any(|warning| matches!(warning, Warning::RegistrationExpires { deadline } if deadline % 86400 == 0)));
@@ -573,7 +579,13 @@ async fn pure_lobby_keeps_admission_and_returns_irreversible_expiry_warnings() {
     .unwrap();
     let before = m.enrol_store.load(USER).await.unwrap().unwrap();
     let lobby = m
-        .lobby(&login.authentication, &policy, &snapshot, &empty, now() as u64)
+        .lobby(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &empty,
+            now() as u64,
+        )
         .await
         .unwrap();
     assert!(!lobby.decision.allowed);
@@ -603,14 +615,30 @@ async fn lobby_evaluates_gates_checked_a_second_earlier_and_refuses_a_clock_befo
     // A second passes between the gate check and the lobby read: no refusal.
     clock.set(now() + 1);
     let lobby = m
-        .lobby(&login.authentication, &policy, &snapshot, &gates, now() as u64)
+        .lobby(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &gates,
+            now() as u64,
+        )
         .await
         .unwrap();
-    assert_eq!(lobby.enrolment, m.enrol_store.load(USER).await.unwrap().unwrap());
+    assert_eq!(
+        lobby.enrolment,
+        m.enrol_store.load(USER).await.unwrap().unwrap()
+    );
     // A live clock before the gates' check time is a regression: refused.
     let later = checked(&snapshot, SUBJECT, &[test_gate("a", SUBJECT)], now() + 5).await;
     assert!(matches!(
-        m.lobby(&login.authentication, &policy, &snapshot, &later, (now() + 5) as u64).await,
+        m.lobby(
+            &login.authentication,
+            &policy,
+            &snapshot,
+            &later,
+            (now() + 5) as u64
+        )
+        .await,
         Err(Error::Policy)
     ));
 }
@@ -643,7 +671,8 @@ async fn stale_verified_inputs_and_unbounded_leases_cannot_admit() {
         .await
         .unwrap();
     assert!(matches!(
-        m.lobby(&login.authentication, &policy, &old, &gates, now() as u64).await,
+        m.lobby(&login.authentication, &policy, &old, &gates, now() as u64)
+            .await,
         Err(Error::Policy)
     ));
     assert_eq!(
@@ -1210,8 +1239,14 @@ async fn a_restricted_member_can_neither_add_nor_activate_a_device_key() {
         .record_legal(&clbs::SignedOrder { order, proof })
         .await
         .unwrap();
-    assert_eq!(m.add_device_key(SUBJECT, device(9)).await, Err(Error::Restricted));
-    assert_eq!(m.add_device_key(SUBJECT, device(8)).await, Err(Error::Restricted));
+    assert_eq!(
+        m.add_device_key(SUBJECT, device(9)).await,
+        Err(Error::Restricted)
+    );
+    assert_eq!(
+        m.add_device_key(SUBJECT, device(8)).await,
+        Err(Error::Restricted)
+    );
     assert_eq!(
         m.activate_device_key(SUBJECT, device(8)).await,
         Err(Error::Restricted)
