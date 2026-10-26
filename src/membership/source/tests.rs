@@ -44,6 +44,7 @@ fn restriction(id: &str) -> clbs::SignedOrder {
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
+        scope: clbs::Scope::Member,
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())

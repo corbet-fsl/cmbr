@@ -54,6 +54,14 @@ async fn open(path: &std::path::Path) -> crlt::Db {
         "device-pairing",
         crate::DEVICE_PAIRING_SCHEMA,
     ));
+    // Test-only tail matching production: order scope survives the store
+    // round-trip (P4b). Production registers this at the end of the real
+    // community migration history; history entries never move.
+    history.push(crlt::Migration::new(
+        history.len() as u32 + 1,
+        "clbs-scope",
+        cgts::legal_storage::SCOPE_SCHEMA,
+    ));
     db.migrate(&history).await.unwrap();
     db
 }

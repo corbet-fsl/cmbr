@@ -75,6 +75,10 @@ pub(super) fn migrations() -> Vec<crlt::Migration<'static>> {
         ("policy", cplc::SCHEMA),
         ("device-registry", crate::DEVICE_REGISTRY_SCHEMA),
         ("device-pairing", crate::DEVICE_PAIRING_SCHEMA),
+        // Test-only tail matching production: order scope survives the store
+        // round-trip (P4b). Production registers this at the end of the real
+        // community migration history; history entries never move.
+        ("clbs-scope", cgts::legal_storage::SCOPE_SCHEMA),
     ]);
     schemas
         .into_iter()

@@ -1230,6 +1230,7 @@ async fn a_restricted_member_can_neither_add_nor_activate_a_device_key() {
         kind: clbs::OrderKind::Legal {
             authority: "fixture-signature-authority".into(),
         },
+        scope: clbs::Scope::Member,
     };
     let proof = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())

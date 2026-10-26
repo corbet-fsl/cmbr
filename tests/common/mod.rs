@@ -79,6 +79,7 @@ pub fn ban(community: &str) -> clbs::SignedOrder {
         reference: "synthetic-member-confirmation".into(),
         entered_by: SUBJECT.into(),
         kind: clbs::OrderKind::SelfBan,
+        scope: clbs::Scope::Member,
     };
     let proof = SigningKey::from_bytes(&[7; 32])
         .sign(&order.signing_payload().unwrap())
@@ -124,6 +125,10 @@ pub fn migrations() -> Vec<crlt::Migration<'static>> {
         ("cmbr-device-pending", cmbr::DEVICE_PENDING_SCHEMA),
         ("device-registry", cmbr::DEVICE_REGISTRY_SCHEMA),
         ("device-pairing", cmbr::DEVICE_PAIRING_SCHEMA),
+        // Test-only tail matching production: order scope survives the store
+        // round-trip (P4b). Production registers this at the end of the real
+        // community migration history; history entries never move.
+        ("clbs-scope", cgts::legal_storage::SCOPE_SCHEMA),
     ]);
     schemas
         .into_iter()
