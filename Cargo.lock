@@ -987,7 +987,7 @@ dependencies = [
 [[package]]
 name = "clbs"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/clbs?branch=main#4c3bbeb33ce290ca3d5f1a518928c1447d1f9280"
+source = "git+https://git.corbet.ch/corbet-foss/clbs?branch=main#7e05c91476ea1791bc667d8dad3fac0c732f4201"
 dependencies = [
  "serde",
  "serde_json",
