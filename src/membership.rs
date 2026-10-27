@@ -581,6 +581,73 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         }
     }
 
+    /// Stamped pairing, step one, for a DELEGATED key (decided 2026-10-27, option B): the same
+    /// checks as `add_device_key`, plus `host`, an ACTIVE `Full` device key of the same member,
+    /// approved it. The PENDING row is of class `Delegated`: once activated it opens community
+    /// sessions only. A delegated, pending, revoked or foreign host is refused (no delegation
+    /// chains); an equal retry is idempotent only for a live PENDING delegated key.
+    pub async fn add_delegated_device_key(
+        &self,
+        pseudonym: &str,
+        key: [u8; 32],
+        host: [u8; 32],
+    ) -> Result<()> {
+        crate::text(pseudonym)?;
+        if key == host {
+            return Err(Error::InvalidInput);
+        }
+        self.unrestricted(pseudonym).await?;
+        let existing = self
+            .enrol_store
+            .load_subject(pseudonym)
+            .await?
+            .ok_or(Error::Identity)?;
+        let user = existing.user();
+        let _guard = crate::storage::member_lock(self.storage.community(), user).await;
+        let row = self.enrol.view(user, self.now()?).await?;
+        if row.state().is_terminal() {
+            return Err(Error::Transition);
+        }
+        let member = user.to_string();
+        if self.storage.device_key_state(&member, host).await?
+            != Some(crate::DeviceKeyState::Active)
+            || self.storage.device_key_class(&member, host).await?
+                != Some(crate::DeviceKeyClass::Full)
+        {
+            return Err(Error::Identity);
+        }
+        let now = self.now()?;
+        self.storage
+            .remove_expired_pending_device_key(&member, key, now)
+            .await?;
+        let until = now
+            .checked_add(PAIRING_PENDING_SECONDS)
+            .ok_or(Error::InvalidInput)?;
+        if self
+            .storage
+            .add_delegated_device_key(&member, key, until)
+            .await?
+        {
+            return Ok(());
+        }
+        match (
+            self.storage.pending_device_key_until(&member, key).await?,
+            self.storage.device_key_class(&member, key).await?,
+        ) {
+            (Some(held), Some(crate::DeviceKeyClass::Delegated)) if held > now => Ok(()),
+            _ => Err(Error::Transition),
+        }
+    }
+
+    /// The capability class of a member's registered device key in this community.
+    pub async fn device_key_class(
+        &self,
+        user: Uuid,
+        key: [u8; 32],
+    ) -> Result<Option<crate::DeviceKeyClass>> {
+        self.storage.device_key_class(&user.to_string(), key).await
+    }
+
     /// Stamped pairing, step two: the lineage revision covering `key` is published and the new
     /// key proved possession. Makes the PENDING key ACTIVE only while the approval recorded at
     /// `add_device_key` lives. An expired PENDING key is removed and refused; an unknown or

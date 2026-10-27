@@ -724,3 +724,69 @@ async fn libsql_pairing_pending_contract_persists_and_legacy_rows_are_expired() 
     );
     pairing_pending_contract(LibsqlStorage::new(&db, "test").unwrap()).await;
 }
+
+/// Capability classes (A9): rows from before the class column are full devices; a delegated
+/// row is only added for a member that already has a registered key, and keeps its class.
+async fn class_contract(store: impl Storage) {
+    let (first, delegate, lone) = (device_key(1), device_key(2), device_key(3));
+    assert!(
+        !store
+            .add_delegated_device_key("nobody", lone, 10)
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.device_key_class("nobody", lone).await.unwrap(), None);
+    assert!(
+        store
+            .bind_first_device_key("m", first, [9; 32])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.device_key_class("m", first).await.unwrap(),
+        Some(DeviceKeyClass::Full)
+    );
+    assert!(
+        store
+            .add_delegated_device_key("m", delegate, 10)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .add_delegated_device_key("m", delegate, 10)
+            .await
+            .unwrap()
+    );
+    assert!(!store.add_device_key("m", delegate, 10).await.unwrap());
+    assert_eq!(
+        store.device_key_class("m", delegate).await.unwrap(),
+        Some(DeviceKeyClass::Delegated)
+    );
+    assert_eq!(
+        store.device_key_state("m", delegate).await.unwrap(),
+        Some(DeviceKeyState::Pending)
+    );
+}
+
+#[tokio::test]
+async fn memory_device_classes() {
+    class_contract(MemoryStorage::new("test").unwrap()).await;
+}
+
+#[tokio::test]
+async fn libsql_device_classes_default_existing_rows_to_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", dir.path().join("classes.db").display());
+    let db = crlt::Db::open(crlt::Config::new(&url, "")).await.unwrap();
+    let history = [
+        crlt::Migration::new(1, "cmbr", SCHEMA),
+        crlt::Migration::new(2, "cmbr-device-keys", DEVICE_KEYS_SCHEMA),
+        crlt::Migration::new(3, "cmbr-device-pending", DEVICE_PENDING_SCHEMA),
+        crlt::Migration::new(4, "device-registry", DEVICE_REGISTRY_SCHEMA),
+        crlt::Migration::new(5, "device-pairing", DEVICE_PAIRING_SCHEMA),
+        crlt::Migration::new(6, "device-class", DEVICE_CLASS_SCHEMA),
+    ];
+    db.migrate(&history).await.unwrap();
+    class_contract(LibsqlStorage::new(&db, "test").unwrap()).await;
+}

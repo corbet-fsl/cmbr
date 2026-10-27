@@ -54,6 +54,23 @@ pub const DEVICE_PAIRING_SCHEMA: &str =
     "ALTER TABLE cvld_device_registry ADD COLUMN pending_until INTEGER
     CHECK (pending_until IS NULL OR pending_until > 0);";
 
+/// Capability class of every registry row. Appended after `DEVICE_PAIRING_SCHEMA`; every row
+/// that existed before is a full device.
+pub const DEVICE_CLASS_SCHEMA: &str =
+    "ALTER TABLE cvld_device_registry ADD COLUMN class TEXT NOT NULL
+    DEFAULT 'full' CHECK (class IN ('full','delegated'));";
+
+/// What a registry device key may do. A `Delegated` key (decided 2026-10-27, D1) opens
+/// community sessions only: it never authorizes another device, never opens an admin session
+/// and never acts for the wallet, account signing, stamps or account proofs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKeyClass {
+    /// Every device-key capability of the one-confirmation model.
+    Full,
+    /// Community sessions only.
+    Delegated,
+}
+
 /// The opaque initial creation commitment held by a device-key member's first device key,
 /// and the one publication bound to it, if any. Never a root, signing or use capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +261,25 @@ pub trait Storage: Send + Sync {
         key: [u8; 32],
         pending_until: i64,
     ) -> impl Future<Output = Result<bool>> + Send;
+    /// Like `add_device_key`, with the PENDING row in class `Delegated`. A store without
+    /// capability classes refuses.
+    fn add_delegated_device_key(
+        &self,
+        _member: &str,
+        _key: [u8; 32],
+        _pending_until: i64,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        std::future::ready(Err(Error::Unavailable))
+    }
+    /// The capability class of this member's registered device key; `None` when unknown.
+    /// A store without capability classes refuses.
+    fn device_key_class(
+        &self,
+        _member: &str,
+        _key: [u8; 32],
+    ) -> impl Future<Output = Result<Option<DeviceKeyClass>>> + Send {
+        std::future::ready(Err(Error::Unavailable))
+    }
     /// The instant a PENDING key of this member expires; `None` when the key is not PENDING.
     /// A legacy PENDING row that carries no expiry reports 0 (long expired).
     fn pending_device_key_until(
@@ -396,6 +432,8 @@ struct MemoryState {
     /// Expiry of every PENDING registry key (seconds); absent for keys in any other state.
     pending_until: BTreeMap<(String, [u8; 32]), i64>,
     initial: BTreeMap<(String, [u8; 32]), DeviceInitialCreation>,
+    /// Registry keys of class `Delegated`; every other registered key is `Full`.
+    delegated: BTreeSet<(String, [u8; 32])>,
 }
 /// Real in-memory storage. Clones share state; no timestamps of activity exist.
 #[derive(Clone)]
@@ -412,6 +450,33 @@ impl MemoryStorage {
             community,
             state: Arc::default(),
         })
+    }
+}
+impl MemoryStorage {
+    async fn add_classed(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+        class: DeviceKeyClass,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        pending_until_input(pending_until)?;
+        let mut state = self.state.lock().await;
+        let keys = state.registry.entry(member.to_owned()).or_default();
+        if keys.is_empty() || keys.contains_key(&key) {
+            return Ok(false);
+        }
+        keys.insert(key, DeviceKeyState::Pending);
+        state
+            .pending_until
+            .insert((member.to_owned(), key), pending_until);
+        if class == DeviceKeyClass::Delegated {
+            state.delegated.insert((member.to_owned(), key));
+        } else {
+            state.delegated.remove(&(member.to_owned(), key));
+        }
+        Ok(true)
     }
 }
 impl Storage for MemoryStorage {
@@ -661,18 +726,36 @@ impl Storage for MemoryStorage {
         key: [u8; 32],
         pending_until: i64,
     ) -> Result<bool> {
+        self.add_classed(member, key, pending_until, DeviceKeyClass::Full)
+            .await
+    }
+    async fn add_delegated_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+    ) -> Result<bool> {
+        self.add_classed(member, key, pending_until, DeviceKeyClass::Delegated)
+            .await
+    }
+    async fn device_key_class(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> Result<Option<DeviceKeyClass>> {
         registry_input(member, &key)?;
-        pending_until_input(pending_until)?;
-        let mut state = self.state.lock().await;
-        let keys = state.registry.entry(member.to_owned()).or_default();
-        if keys.is_empty() || keys.contains_key(&key) {
-            return Ok(false);
-        }
-        keys.insert(key, DeviceKeyState::Pending);
-        state
-            .pending_until
-            .insert((member.to_owned(), key), pending_until);
-        Ok(true)
+        let state = self.state.lock().await;
+        let known = state
+            .registry
+            .get(member)
+            .is_some_and(|keys| keys.contains_key(&key));
+        Ok(known.then(|| {
+            if state.delegated.contains(&(member.to_owned(), key)) {
+                DeviceKeyClass::Delegated
+            } else {
+                DeviceKeyClass::Full
+            }
+        }))
     }
     async fn pending_device_key_until(&self, member: &str, key: [u8; 32]) -> Result<Option<i64>> {
         registry_input(member, &key)?;
@@ -1125,6 +1208,60 @@ impl Storage for LibsqlStorage {
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+    async fn add_delegated_device_key(
+        &self,
+        member: &str,
+        key: [u8; 32],
+        pending_until: i64,
+    ) -> Result<bool> {
+        registry_input(member, &key)?;
+        pending_until_input(pending_until)?;
+        let mut tx = self.scope.tx().await?;
+        let known = tx
+            .query(
+                "SELECT 1 FROM cvld_device_registry WHERE member = ?1 LIMIT 1",
+                params![member],
+            )
+            .await?;
+        let same = tx
+            .query(
+                "SELECT 1 FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        if known.is_empty() || !same.is_empty() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO cvld_device_registry (member, device_key, state, pending_until, class) VALUES (?1, ?2, 'pending', ?3, 'delegated')",
+            params![member, key.to_vec(), pending_until],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+    async fn device_key_class(
+        &self,
+        member: &str,
+        key: [u8; 32],
+    ) -> Result<Option<DeviceKeyClass>> {
+        registry_input(member, &key)?;
+        let rows = self
+            .scope
+            .query(
+                "SELECT class FROM cvld_device_registry WHERE member = ?1 AND device_key = ?2",
+                params![member, key.to_vec()],
+            )
+            .await?;
+        rows.first()
+            .map(|row| match row.get_str(0)? {
+                "full" => Ok(DeviceKeyClass::Full),
+                "delegated" => Ok(DeviceKeyClass::Delegated),
+                _ => Err(Error::Unavailable),
+            })
+            .transpose()
     }
     async fn pending_device_key_until(&self, member: &str, key: [u8; 32]) -> Result<Option<i64>> {
         registry_input(member, &key)?;
