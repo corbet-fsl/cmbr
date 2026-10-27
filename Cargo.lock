@@ -954,7 +954,7 @@ dependencies = [
 [[package]]
 name = "ckyh"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/ckyh?branch=main#745d661d97cd80cdd3f12fb71e65d0c8abb1447a"
+source = "git+https://git.corbet.ch/corbet-foss/ckyh?branch=main#788f42141ca886c608c95e9a92e72c04041a3ad3"
 dependencies = [
  "ciborium",
  "crlt",
@@ -987,7 +987,7 @@ dependencies = [
 [[package]]
 name = "clbs"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/clbs?branch=main#7e05c91476ea1791bc667d8dad3fac0c732f4201"
+source = "git+https://git.corbet.ch/corbet-foss/clbs?branch=main#4c3bbeb33ce290ca3d5f1a518928c1447d1f9280"
 dependencies = [
  "serde",
  "serde_json",
@@ -1069,7 +1069,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 [[package]]
 name = "cnrl"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cnrl?branch=main#64c9b17b75d8ae5d9de0c5db411255626907bf0b"
+source = "git+https://git.corbet.ch/corbet-foss/cnrl?branch=main#95eebdbd7d67665da4f2206950320639717165d8"
 dependencies = [
  "chrono",
  "ckyh",
@@ -1279,7 +1279,7 @@ dependencies = [
 [[package]]
 name = "crgs"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/crgs?branch=main#d0eea0c0ec7020be21af00892ac37d10e890323d"
+source = "git+https://git.corbet.ch/corbet-foss/crgs?branch=main#242c34086a862a748075ab5da8d9871671207879"
 dependencies = [
  "chrono",
  "crlt",
@@ -2728,15 +2728,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -3755,7 +3746,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
