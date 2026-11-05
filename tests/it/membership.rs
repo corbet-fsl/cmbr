@@ -719,9 +719,16 @@ async fn pending_device_key_goes_live_only_after_the_existing_device_approves() 
     let mut expected = vec![old, new];
     expected.sort();
     assert_eq!(live, expected);
+    // The server-internal roster check answers per (subject, device), without a session.
+    assert!(m.device_is_current(SUBJECT, &new).await.unwrap());
+    assert!(m.device_is_current(SUBJECT, &old).await.unwrap());
+    assert!(!m.device_is_current(SUBJECT, &other).await.unwrap());
+    assert!(!m.device_is_current(&"02".repeat(48), &old).await.unwrap());
     // Revocation removes a key and refuses an unknown one.
     m.revoke_device_key(existing, new).await.unwrap();
     assert_eq!(m.current_device_keys(existing).await.unwrap(), vec![old]);
+    assert!(!m.device_is_current(SUBJECT, &new).await.unwrap());
+    assert!(m.device_is_current(SUBJECT, &old).await.unwrap());
     assert!(m.revoke_device_key(existing, new).await.is_err());
     // An unapproved pending key can be revoked, and an expired one cannot be approved.
     m.authorize_pending_device_key(newcomer, other)

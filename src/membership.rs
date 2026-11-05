@@ -1074,6 +1074,25 @@ impl<S: Storage + 'static, L: clbs::Verifier + 'static, C: clbs::Clock + 'static
         self.live_device_keys(&row).await
     }
 
+    /// Server-internal, without an Authentication: is `device` a current device key of the
+    /// admitted member `subject` right now? The accounting roster builder asks it at build time
+    /// for each delegation, naming only the pseudonym and device key that the roster entry
+    /// already shows to the operator, and learns only yes or no. A revoked or removed key, a key
+    /// bound to a passkey that is no longer live, an unknown subject and a member who is not
+    /// Admitted all answer false.
+    pub async fn device_is_current(&self, subject: &str, device: &[u8; 32]) -> Result<bool> {
+        let Some(row) = self.enrol_store.load_subject(subject).await? else {
+            return Ok(false);
+        };
+        // A pure read without the member lock: the builder runs on the account worker, and a
+        // member request queued behind it holds that member's lock through its SourceLease.
+        let row = self.enrol.view(row.user(), self.now()?).await?;
+        if row.subject() != subject || row.state() != State::Admitted {
+            return Ok(false);
+        }
+        Ok(self.live_device_keys(&row).await?.contains(device))
+    }
+
     async fn live_device_keys(&self, row: &Record) -> Result<Vec<[u8; 32]>> {
         let credentials = self.credentials(row.user()).await?;
         let bindings = self.storage.device_keys(row.subject()).await?;
