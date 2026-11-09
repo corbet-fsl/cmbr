@@ -2,14 +2,14 @@ use super::*;
 
 mod queue;
 use crate::test_common as common;
+use crate::test_common::SoftwareToken;
 use common::*;
-use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
 
 fn order(community: &str) -> clbs::Order {
     ban(community).order
 }
 fn assertion(
-    device: &mut SoftToken,
+    device: &mut SoftwareToken,
     challenge: ckyh::RequestChallengeResponse,
 ) -> ckyh::PublicKeyCredential {
     device
@@ -240,7 +240,7 @@ async fn another_equal_standing_passkey_cannot_take_over_an_existing_confirmatio
     let (_dir, db) = temporary().await;
     let m = facade(&db, "self-ban-key", Clock::new());
     let (mut original, first) = pending(&m, "self-ban-key").await;
-    let mut another = SoftToken::new(true).unwrap().0;
+    let mut another = SoftwareToken::new(true).unwrap().0;
     let (mut challenge, registration) = m
         .begin_additional_registration(&first.authentication)
         .await
@@ -322,7 +322,7 @@ async fn expiry_after_real_awaited_webauthn_verification_withholds_confirmation(
         },
     )
     .unwrap();
-    let mut device = SoftToken::new(true).unwrap().0;
+    let mut device = SoftwareToken::new(true).unwrap().0;
     let (mut options, registration) = m.begin_registration(USER, SUBJECT).await.unwrap();
     options
         .public_key

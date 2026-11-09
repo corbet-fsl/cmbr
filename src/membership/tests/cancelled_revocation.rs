@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-use webauthn_authenticator_rs::AuthenticatorBackend;
 
 struct Pause {
     reached: oneshot::Sender<()>,

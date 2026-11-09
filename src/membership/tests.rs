@@ -61,11 +61,11 @@ async fn last_key_revocation_releases_but_preserves_committed_retention() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn committed_passkey_receipt_survives_an_interrupted_registration() {
-    use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+    use crate::test_common::SoftwareToken;
     let (_dir, db) = temporary().await;
     let m = facade(&db, "a", Clock::new());
     let (challenge, pending) = m.begin_registration(USER, SUBJECT).await.unwrap();
-    let mut token = SoftToken::new(true).unwrap().0;
+    let mut token = SoftwareToken::new(true).unwrap().0;
     let response = token
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
@@ -108,14 +108,14 @@ async fn committed_passkey_receipt_survives_an_interrupted_registration() {
 fn registration_reply(
     mut challenge: ckyh::CreationChallengeResponse,
 ) -> ckyh::RegisterPublicKeyCredential {
-    use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+    use crate::test_common::SoftwareToken;
     challenge
         .public_key
         .authenticator_selection
         .as_mut()
         .unwrap()
         .require_resident_key = false;
-    SoftToken::new(true)
+    SoftwareToken::new(true)
         .unwrap()
         .0
         .perform_register(
@@ -444,7 +444,7 @@ async fn cancelled_reservation_finishes_and_never_blocks_other_members() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn revoked_authentication_cannot_change_pins_or_revoke_the_remaining_key() {
-    use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+    use crate::test_common::SoftwareToken;
     let (_dir, db) = temporary().await;
     let m = facade(&db, "a", Clock::new());
     let (_, login) = pending(&m, "a").await;
@@ -453,7 +453,7 @@ async fn revoked_authentication_cannot_change_pins_or_revoke_the_remaining_key()
     let (challenge, pending) = blocking(move || keys.start_registration(USER))
         .await
         .unwrap();
-    let mut token = SoftToken::new(true).unwrap().0;
+    let mut token = SoftwareToken::new(true).unwrap().0;
     let response = token
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),

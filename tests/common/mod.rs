@@ -11,7 +11,8 @@ pub use creation::{Session, admission_request, ensure_active, ensure_first_seat}
 
 use ckyh::Uuid;
 use ed25519_dalek::{Signer, SigningKey};
-use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+pub mod softtoken;
+pub use softtoken::SoftwareToken;
 
 pub const USER: Uuid = Uuid::from_u128(1);
 pub const SUBJECT: &str = "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101";
@@ -149,8 +150,8 @@ pub async fn register<C: clbs::Clock + 'static>(
     facade: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
     user: Uuid,
     subject: &str,
-) -> SoftToken {
-    let mut device = SoftToken::new(true).unwrap().0;
+) -> SoftwareToken {
+    let mut device = SoftwareToken::new(true).unwrap().0;
     let (mut challenge, pending) = facade.begin_registration(user, subject).await.unwrap();
     challenge
         .public_key
@@ -177,21 +178,13 @@ pub async fn register<C: clbs::Clock + 'static>(
 }
 pub async fn login<C: clbs::Clock + 'static>(
     facade: &cmbr::Membership<cmbr::LibsqlStorage, Verify, C>,
-    device: &mut SoftToken,
+    device: &mut SoftwareToken,
     user: Uuid,
 ) -> cmbr::Login {
-    // The software wallet retains IDs in its own fixture store, just as a real
+    // The software wallet retains the credential ID it registered, just as a real
     // wallet retains the registration response. This does not read server state.
-    let cbor = serde_cbor_2::value::to_value(&*device).unwrap();
-    let serde_cbor_2::Value::Map(fields) = cbor else {
-        panic!("token map")
-    };
-    let tokens: std::collections::HashMap<Vec<u8>, Vec<u8>> = serde_cbor_2::value::from_value(
-        fields[&serde_cbor_2::Value::Text("tokens".into())].clone(),
-    )
-    .unwrap();
-    let id = tokens.keys().next().unwrap();
-    let (challenge, pending) = facade.begin_login(user, id.clone().into()).await.unwrap();
+    let id = device.credential_id().unwrap().to_vec();
+    let (challenge, pending) = facade.begin_login(user, id.into()).await.unwrap();
     let response = device
         .perform_auth(
             ckyh::Url::parse(ORIGIN).unwrap(),
@@ -247,7 +240,7 @@ pub fn policy(community: &str) -> crbk::Snapshot {
         .into(),
     }
 }
-pub async fn pending(facade: &Facade, community: &str) -> (SoftToken, cmbr::Login) {
+pub async fn pending(facade: &Facade, community: &str) -> (SoftwareToken, cmbr::Login) {
     let mut device = register(facade, USER, SUBJECT).await;
     let login = login(facade, &mut device, USER).await;
     facade

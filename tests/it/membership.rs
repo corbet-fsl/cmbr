@@ -2,7 +2,6 @@
 use crate::common::*;
 use cmbr::Error;
 use cnrl::State;
-use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn complete_membership_round_trip() {
@@ -275,12 +274,12 @@ async fn unverified_registration_and_wrong_instance_do_not_write_passkeys() {
         .as_mut()
         .unwrap()
         .require_resident_key = false;
-    let mut device = SoftToken::new(true).unwrap().0;
+    let mut device = SoftwareToken::new(true).unwrap().0;
     let response = device
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
             {
-                // SoftToken is a legacy non-resident fixture.
+                // SoftwareToken is a legacy non-resident fixture.
                 let mut options = challenge.public_key;
                 options
                     .authenticator_selection
@@ -307,7 +306,7 @@ async fn unverified_registration_and_wrong_instance_do_not_write_passkeys() {
         .as_mut()
         .unwrap()
         .require_resident_key = false;
-    let mut device = SoftToken::new(true).unwrap().0;
+    let mut device = SoftwareToken::new(false).unwrap().0;
     // Let the fixture produce a UV-less registration despite the server's policy.
     let mut options = challenge.public_key;
     if let Some(selection) = &mut options.authenticator_selection {
@@ -400,12 +399,12 @@ async fn additional_device_preserves_membership_and_survives_original_removal() 
         .begin_additional_registration(&first.authentication)
         .await
         .unwrap();
-    let mut second = SoftToken::new(true).unwrap().0;
+    let mut second = SoftwareToken::new(true).unwrap().0;
     let response = second
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
             {
-                // SoftToken is a legacy non-resident fixture.
+                // SoftwareToken is a legacy non-resident fixture.
                 let mut options = options.public_key;
                 options
                     .authenticator_selection
@@ -458,7 +457,7 @@ async fn additional_device_preserves_membership_and_survives_original_removal() 
         .as_mut()
         .unwrap()
         .require_resident_key = false;
-    let response = SoftToken::new(true)
+    let response = SoftwareToken::new(true)
         .unwrap()
         .0
         .perform_register(ckyh::Url::parse(ORIGIN).unwrap(), request, 300_000)
@@ -564,13 +563,13 @@ async fn additional_registration_rejects_substitution_revocation_and_expiry() {
         .begin_additional_registration(&first.authentication)
         .await
         .unwrap();
-    let response = SoftToken::new(true)
+    let response = SoftwareToken::new(true)
         .unwrap()
         .0
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
             {
-                // SoftToken is a legacy non-resident fixture.
+                // SoftwareToken is a legacy non-resident fixture.
                 let mut options = options.public_key;
                 options
                     .authenticator_selection
@@ -598,13 +597,13 @@ async fn additional_registration_rejects_substitution_revocation_and_expiry() {
         .begin_additional_registration(&other.authentication)
         .await
         .unwrap();
-    let response = SoftToken::new(true)
+    let response = SoftwareToken::new(true)
         .unwrap()
         .0
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
             {
-                // SoftToken is a legacy non-resident fixture.
+                // SoftwareToken is a legacy non-resident fixture.
                 let mut options = options.public_key;
                 options
                     .authenticator_selection
@@ -631,13 +630,13 @@ async fn additional_registration_rejects_substitution_revocation_and_expiry() {
         .begin_additional_registration(&first.authentication)
         .await
         .unwrap();
-    let response = SoftToken::new(true)
+    let response = SoftwareToken::new(true)
         .unwrap()
         .0
         .perform_register(
             ckyh::Url::parse(ORIGIN).unwrap(),
             {
-                // SoftToken is a legacy non-resident fixture.
+                // SoftwareToken is a legacy non-resident fixture.
                 let mut options = options.public_key;
                 options
                     .authenticator_selection
@@ -687,7 +686,7 @@ async fn pending_device_key_goes_live_only_after_the_existing_device_approves() 
     m.authorize_device_key(existing, old).await.unwrap();
     // The existing device adds the new device's passkey; the new device logs in with it.
     let (options, state) = m.begin_additional_registration(existing).await.unwrap();
-    let mut token = SoftToken::new(true).unwrap().0;
+    let mut token = SoftwareToken::new(true).unwrap().0;
     let mut request = options.public_key;
     request
         .authenticator_selection
