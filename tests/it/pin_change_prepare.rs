@@ -1,6 +1,5 @@
 //! Genuine passkey authority and the original member queue, before native proof.
-mod common;
-use common::*;
+use crate::common::*;
 use std::time::Duration;
 
 fn pin(field: &str, salt: u8) -> cmbr::PinV2 {

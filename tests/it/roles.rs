@@ -1,9 +1,8 @@
 //! Real passkeys, membership lifecycle and SQL register role authorization.
 //! Seeding the original register establishes pre-existing roles only; root
 //! voucher bootstrap is a separate integration requirement.
-mod common;
+use crate::common::*;
 use cmbr::{Error, Role, Uuid};
-use common::*;
 use std::time::Duration;
 
 async fn admitted(m: &Facade, number: u128) -> cmbr::Authentication {

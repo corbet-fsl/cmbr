@@ -1,8 +1,7 @@
 //! Real WebAuthn, register, enrolment, pin and self-ban integration tests.
-mod common;
+use crate::common::*;
 use cmbr::Error;
 use cnrl::State;
-use common::*;
 use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
 
 #[tokio::test(flavor = "multi_thread")]

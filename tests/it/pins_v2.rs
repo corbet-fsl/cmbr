@@ -1,6 +1,5 @@
 //! Real cmbr storage followed by cgrd's signed v2 opening verification.
-mod common;
-use common::*;
+use crate::common::*;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
 

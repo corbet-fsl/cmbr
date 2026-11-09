@@ -1,6 +1,5 @@
 //! Discoverable membership restore through a real resident software passkey.
-mod common;
-use common::{
+use crate::common::{
     resident::{Resident, strip_prf},
     *,
 };

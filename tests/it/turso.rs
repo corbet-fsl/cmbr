@@ -1,6 +1,6 @@
 //! Optional round trip against a caller-supplied disposable Turso database.
-mod common;
 
+use crate::common;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires explicit authorized live-service execution"]
 async fn optional_real_turso() {

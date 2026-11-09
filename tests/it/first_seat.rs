@@ -1,6 +1,5 @@
 //! The first seat of a community comes from the caller's entitlement, never from the community name.
-mod common;
-use common::*;
+use crate::common::*;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_community_named_root_has_an_ordinary_first_admin() {
