@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-FIRST_PARTY = re.compile(r"^(?:git\+)?https://(?:git\.corbet\.ch|github\.com)/(?:corbet-(?:foss|libs)|cmtymeet)/")
+FIRST_PARTY = re.compile(r"^(?:git\+)?https://(?:github\.com/(?:corbet-(?:foss|libs)|cmtymeet)|git\.corbet\.ch/(?:corbet-(?:foss|libs|libre|fsl)|cmty(?:meet|mt)))/")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 # These are the original transitive issuer owners, not alternative selectors
 # for product declarations. The maintained CBLC issuer still consumes them.
@@ -162,7 +162,25 @@ def self_test():
     check_original_issuer_fixtures()
 
 
+def check_first_party_orgs():
+    """Every current owner resolves on the canonical forge; github.com keeps its former owners."""
+    for owner in ('corbet-foss', 'corbet-libs', 'corbet-libre', 'corbet-fsl',
+                  'cmtymeet', 'cmtymt'):
+        url = f'https://git.corbet.ch/{owner}/example'
+        if not FIRST_PARTY.match(url):
+            raise AssertionError(f'First-party owner rejected: {url}')
+    for url in ('https://git.corbet.ch.evil.test/corbet-libre/example',
+                'https://user@git.corbet.ch/corbet-libre/example',
+                'https://git.corbet.ch:443/corbet-libre/example',
+                'https://git.corbet.ch/corbet-libre.evil/example',
+                'https://github.com/corbet-libre/example',
+                'https://github.com/corbet-fsl/example',
+                'https://github.com/cmtymt/example'):
+        if FIRST_PARTY.match(url):
+            raise AssertionError(f'Invalid first-party owner accepted: {url}')
+
 if __name__ == '__main__':
+    check_first_party_orgs()
     if '--metadata-issuers' in sys.argv:
         print(json.dumps(metadata_issuer_selectors(json.load(sys.stdin))))
     else:
