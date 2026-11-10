@@ -9,7 +9,6 @@ python3 -B .ci/test-resolve-dependencies.py
 python3 -B .ci/test-passkey-controls.py
 
 rustc --version
-bash .ci/update-our-crates.sh
 cargo fmt --all --check
 node --test .github/check-pins.test.mjs
 cargo metadata --locked --format-version 1 > dependency-metadata.json
