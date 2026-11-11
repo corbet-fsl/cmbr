@@ -8,13 +8,14 @@ import tomllib
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-FIRST_PARTY = re.compile(r"^(?:git\+)?https://(?:github\.com/(?:corbet-(?:foss|libs)|cmtymeet)|git\.corbet\.ch/(?:corbet-(?:foss|libs|libre|fsl)|cmty(?:meet|mt)))/")
+FIRST_PARTY = re.compile(r"^(?:git\+)?https://(?:github\.com/(?:corbet-(?:libre|fsl)|cmtymeet)|git\.corbet\.ch/(?:corbet-(?:libre|fsl)|cmty(?:meet|mt)))/")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 # These are the original transitive issuer owners, not alternative selectors
 # for product declarations. The maintained CBLC issuer still consumes them.
-# The v01 original-issuer exceptions ended with the 2026-11 org move (every pin
-# is branch = main at its new owner); the map stays as the extension point.
-ORIGINAL_ISSUERS = {}
+ORIGINAL_ISSUERS = {
+    'cmbl': ('0.1.0', 'https://git.corbet.ch/corbet-libre/cmbl.git'),
+    'cmmr': ('0.1.0', 'https://git.corbet.ch/corbet-libre/cmmr.git'),
+}
 
 
 
@@ -128,7 +129,7 @@ def check_original_issuer_fixtures():
             {'name': name},
             dict(package, source=f'registry+https://example.test/index#{sha}'),
             dict(package, source=source.replace('git.corbet.ch', 'github.com')),
-            dict(package, source=source.replace('corbet-foss', 'corbet-libs')),
+            dict(package, source=source.replace('corbet-libre', 'corbet-fsl')),
             dict(package, source=source.replace('git.corbet.ch', 'git.corbet.ch.evil.test')),
             dict(package, source=source.replace('git.corbet.ch', 'user@git.corbet.ch')),
             dict(package, source=source.replace('git.corbet.ch', 'git.corbet.ch:443')),
@@ -156,14 +157,14 @@ def check_original_issuer_fixtures():
 
 def self_test():
     for domain in ('git.corbet.ch', 'github.com'):
-        for organization in ('corbet-foss', 'corbet-libs', 'cmtymeet'):
+        for organization in ('corbet-libre', 'corbet-fsl', 'cmtymeet'):
             self_test_for(f'https://{domain}/{organization}/example')
     check_original_issuer_fixtures()
 
 
 def check_first_party_orgs():
     """Every current owner resolves on the canonical forge; github.com keeps its former owners."""
-    for owner in ('corbet-foss', 'corbet-libs', 'corbet-libre', 'corbet-fsl',
+    for owner in ('corbet-libre', 'corbet-fsl',
                   'cmtymeet', 'cmtymt'):
         url = f'https://git.corbet.ch/{owner}/example'
         if not FIRST_PARTY.match(url):
@@ -172,8 +173,6 @@ def check_first_party_orgs():
                 'https://user@git.corbet.ch/corbet-libre/example',
                 'https://git.corbet.ch:443/corbet-libre/example',
                 'https://git.corbet.ch/corbet-libre.evil/example',
-                'https://github.com/corbet-libre/example',
-                'https://github.com/corbet-fsl/example',
                 'https://github.com/cmtymt/example'):
         if FIRST_PARTY.match(url):
             raise AssertionError(f'Invalid first-party owner accepted: {url}')
