@@ -3,7 +3,21 @@ project = "cmbr"
 
 [checks.verify]
 kind = "commands"
-commands = [["bash", ".ci/verify.sh"]]
+fleet = true
+commands = [
+  ["python3", "-B", ".ci/test-resolve-dependencies.py"],
+  ["python3", "-B", ".ci/test-passkey-controls.py"],
+  ["cargo", "fmt", "--all", "--check"],
+  ["node", "--test", ".github/check-pins.test.mjs"],
+  ["bash", "-c", "set -euo pipefail\ncargo metadata --locked --format-version 1 > dependency-metadata.json"],
+  ["node", ".github/check-pins.mjs", "dependency-metadata.json"],
+  ["cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"],
+  ["python3", "-B", ".ci/passkey-controls.py"],
+  ["cargo", "test", "--locked", "--no-fail-fast"],
+  ["ccid", "first-party"],
+  ["node", "--test", ".github/test-auto-merge.mjs"],
+  ["ccid", "coverage", "run"],
+]
 cache_tools = [["rustc", "-vV"], ["cargo", "--version"], ["rustup", "run", "nightly", "rustc", "-vV"], ["rustup", "run", "nightly", "cargo", "llvm-cov", "--version"], ["node", "--version"], ["python3", "--version"], ["pkg-config", "--version"], ["openssl", "version"]]
 cache_env = ["PKG_CONFIG_PATH", "NIX_CFLAGS_COMPILE", "NIX_LDFLAGS", "LD_LIBRARY_PATH"]
 cache_outputs = ["coverage.json", "coverage.lcov", "coverage.txt", "dependency-metadata.json"]
@@ -25,7 +39,7 @@ scheduler = "forgejo"
 runs_on = "linux"
 checks = ["verify", "advisories"]
 workflow = "ci"
-command = ["bash", ".ci/run-cached.sh"]
+command = ["ccid:run-declared-checks"]
 events = ["manual"]
 
 # Retain the reviewed integration graph before a separate locked verification.
@@ -34,10 +48,89 @@ scheduler = "forgejo"
 runs_on = "linux"
 checks = ["resolve-dependencies"]
 workflow = "resolve-dependencies"
-command = ["bash", ".ci/run-cached.sh"]
+command = ["ccid:run-declared-checks"]
 events = ["manual"]
 
 [check_shell]
 
 [security]
 dependencies = "cargo-deny"
+
+[coverage]
+llvm_cov = ["--workspace", "--all-features", "--branch", "--no-cfg-coverage", "--no-cfg-coverage-nightly", "--ignore-filename-regex", "(/tests/|/tests\\.rs$)"]
+report = ["--branch", "--ignore-filename-regex", "(/tests/|/tests\\.rs$)"]
+artifacts = true
+
+[runtime]
+tools = ["nodejs", "python3", "cargo-deny", "cargo-llvm-cov"]
+
+[toolchain]
+nightly = true
+
+[[coverage.exclusions]]
+file = "src/membership.rs"
+line = 713
+source = "Ok(self"
+reason = "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked."
+evidence = "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception"
+targets = ["native"]
+
+[coverage.exclusions.evidence_sources]
+"src/membership.rs" = "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6"
+"src/membership/tests.rs" = "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152"
+"tests/membership.rs" = "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+
+[coverage.exclusions.evidence_packages.cgts]
+source = "git+https://git.corbet.ch/corbet-fsl/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+version = "0.0.0"
+
+[[coverage.exclusions]]
+file = "src/membership.rs"
+line = 714
+source = ".pins"
+reason = "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked."
+evidence = "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception"
+targets = ["native"]
+
+[coverage.exclusions.evidence_sources]
+"src/membership.rs" = "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6"
+"src/membership/tests.rs" = "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152"
+"tests/membership.rs" = "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+
+[coverage.exclusions.evidence_packages.cgts]
+source = "git+https://git.corbet.ch/corbet-fsl/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+version = "0.0.0"
+
+[[coverage.exclusions]]
+file = "src/membership.rs"
+line = 715
+source = ".change(row.subject(), field, expected, replacement, &token)"
+reason = "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked."
+evidence = "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception"
+targets = ["native"]
+
+[coverage.exclusions.evidence_sources]
+"src/membership.rs" = "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6"
+"src/membership/tests.rs" = "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152"
+"tests/membership.rs" = "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+
+[coverage.exclusions.evidence_packages.cgts]
+source = "git+https://git.corbet.ch/corbet-fsl/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+version = "0.0.0"
+
+[[coverage.exclusions]]
+file = "src/membership.rs"
+line = 716
+source = ".await?)"
+reason = "The resolved cgts verifier always refuses and cannot return its sealed spent-change witness; the positive workflow remains externally blocked."
+evidence = "docs/COVERAGE.md#proposed-disabled-pin-continuation-exception"
+targets = ["native"]
+
+[coverage.exclusions.evidence_sources]
+"src/membership.rs" = "879bffa8c02c052bdade737b5efc710c46f5af419cdfe9b4d2c6dd4766eabfc6"
+"src/membership/tests.rs" = "a2d7e5c30c48045305f0de6d05427dd3419dae19624a902b8988b6d19ac5f152"
+"tests/membership.rs" = "eeb709feaba50b7e8096dfc88d51e09cdfaf1ab949fd9753a4f28c98ec5bb93b"
+
+[coverage.exclusions.evidence_packages.cgts]
+source = "git+https://git.corbet.ch/corbet-fsl/cgts?branch=main#0809bf4dcdd209357d56cefa51778e20513a2db4"
+version = "0.0.0"
