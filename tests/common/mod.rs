@@ -5,9 +5,9 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-mod creation;
+pub mod creation;
 pub mod resident;
-pub use creation::{Session, admission_request, ensure_active, ensure_first_seat};
+pub use creation::{Session, admission_request, ensure_active};
 
 use ckyh::Uuid;
 use ed25519_dalek::{Signer, SigningKey};

@@ -1,4 +1,5 @@
 //! The first seat of a community comes from the caller's entitlement, never from the community name.
+use crate::common::creation::ensure_first_seat;
 use crate::common::*;
 
 #[tokio::test(flavor = "multi_thread")]

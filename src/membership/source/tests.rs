@@ -315,7 +315,7 @@ async fn a_revoked_inactive_or_foreign_device_key_is_never_admitted() {
         let key = device(7);
         let auth = device_joined(&owner, key).await;
         set_registry_state(&db, key, state).await;
-        assert!(matches!(admit(&owner, &auth).await, Err(_)), "{state}");
+        assert!(admit(&owner, &auth).await.is_err(), "{state}");
         assert_ne!(
             owner.enrolment_state(common::USER).await.unwrap().state(),
             State::Admitted,
