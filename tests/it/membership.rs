@@ -743,3 +743,42 @@ async fn pending_device_key_goes_live_only_after_the_existing_device_approves() 
     assert!(m.approve_pending_device_key(existing, other).await.is_err());
     assert!(m.confirm_device_key(newcomer, other).await.is_err());
 }
+
+/// The roster check answers no for a member who is not Admitted, although the device key is
+/// still bound: a lapsed membership keeps its bindings, but none of its devices is current.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lapsed_members_bound_device_is_not_current_until_readmitted() {
+    let (_dir, db) = temporary().await;
+    let clock = Clock::new();
+    let m = facade(&db, "a", clock.clone());
+    let (mut token, first) = pending(&m, "a").await;
+    let proof = test_gate("a", SUBJECT);
+    m.admit_test(
+        &first.authentication,
+        &policy("a"),
+        std::slice::from_ref(&proof),
+        lease(),
+    )
+    .await
+    .unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&[41; 32])
+        .verifying_key()
+        .to_bytes();
+    m.authorize_device_key(&first.authentication, key)
+        .await
+        .unwrap();
+    assert!(m.device_is_current(SUBJECT, &key).await.unwrap());
+    let next = login(&m, &mut token, USER).await;
+    assert_eq!(
+        m.lapse_test(&next.authentication, &policy("a"), &[])
+            .await
+            .unwrap()
+            .state(),
+        State::Lapsed
+    );
+    assert!(!m.device_is_current(SUBJECT, &key).await.unwrap());
+    m.admit_test(&next.authentication, &policy("a"), &[proof], lease())
+        .await
+        .unwrap();
+    assert!(m.device_is_current(SUBJECT, &key).await.unwrap());
+}
