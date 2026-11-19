@@ -25,7 +25,8 @@
       "scheduler": "forgejo",
       "checks": [
         "verify",
-        "advisories"
+        "advisories",
+        "portable-paths"
       ],
       "workflow": "ci",
       "command": [
